@@ -1,0 +1,188 @@
+<script>
+/**
+ * LÓGICA DE CLIENTE: MÓDULO DE DIPLOMAS Y CERTIFICADOS PDF
+ */
+
+let CERTIFICADOS_GENERADOS = [];
+
+function cargarParticipantesCertificado() {
+  const select = document.getElementById('certActividadSelect');
+  const tbody = document.getElementById('tablaParticipantesCert');
+  const info = document.getElementById('certParticipantesInfo');
+  if (!select || !tbody) return;
+
+  const idActividad = select.value;
+  if (!idActividad) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--gris); padding: 24px;">Seleccione una actividad para listar los participantes aprobados.</td></tr>';
+    if (info) info.textContent = 'Selecciona los alumnos para emitir sus certificados.';
+    return;
+  }
+
+  // Cargar configuración previa de plantilla si existe
+  google.script.run
+    .withSuccessHandler((cfg) => {
+      if (cfg) {
+        if (cfg.TEMPLATE_DOC_ID) document.getElementById('certDocTemplateId').value = cfg.TEMPLATE_DOC_ID;
+        if (cfg.DRIVE_FOLDER_ID) document.getElementById('certDriveFolderId').value = cfg.DRIVE_FOLDER_ID;
+        if (cfg.HORAS_DEFAULT) document.getElementById('certHorasDefault').value = cfg.HORAS_DEFAULT;
+        if (cfg.ASUNTO_CORREO) document.getElementById('certAsuntoCorreo').value = cfg.ASUNTO_CORREO;
+        if (cfg.CUERPO_CORREO) document.getElementById('certCuerpoCorreo').value = cfg.CUERPO_CORREO;
+      }
+    })
+    .webObtenerConfigCertificado(idActividad);
+
+  // Filtrar participantes de la actividad seleccionada
+  const participaciones = (DATOS.participaciones || []).filter(p => String(p.ID_ACTIVIDAD) === String(idActividad));
+  
+  if (!participaciones.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--gris); padding: 24px;">No hay participantes inscritos en esta actividad.</td></tr>';
+    return;
+  }
+
+  const filasHtml = participaciones.map(p => {
+    const esAprobado = String(p.RESULTADO_FINAL || '').toLowerCase().includes('aprob') ||
+                       String(p.RESULTADO_FINAL || '').toLowerCase().includes('partic');
+    const checked = esAprobado ? 'checked' : '';
+    const badgeClase = esAprobado ? 'badge success' : 'badge warning';
+    
+    return `
+      <tr data-id="${p.ID_PARTICIPACION}">
+        <td style="text-align: center;">
+          <input type="checkbox" class="cert-check-item" value="${p.ID_PARTICIPACION}" ${checked}>
+        </td>
+        <td><strong>${p.DOCUMENTO || p.RUT || '-'}</strong></td>
+        <td>${p.NOMBRE_COMPLETO || '-'}</td>
+        <td>${p.CORREO || '<span style="color:var(--gris);">Sin correo</span>'}</td>
+        <td><span class="${badgeClase}">${p.RESULTADO_FINAL || 'Pendiente'}</span></td>
+        <td>${p.SESIONES_ASISTIDAS || 0} / ${p.SESIONES_TOTALES || '-'}</td>
+        <td id="cert-status-${p.ID_PARTICIPACION}"><span class="badge info">Listo</span></td>
+        <td id="cert-link-${p.ID_PARTICIPACION}">-</td>
+      </tr>
+    `;
+  }).join('');
+
+  tbody.innerHTML = filasHtml;
+  if (info) {
+    info.textContent = `Mostrando ${participaciones.length} participantes vinculados a la capacitación.`;
+  }
+}
+
+function marcarTodosCertificados(marcar) {
+  const checks = document.querySelectorAll('.cert-check-item');
+  checks.forEach(c => c.checked = marcar);
+}
+
+function guardarPlantillaCertificado() {
+  const select = document.getElementById('certActividadSelect');
+  const idActividad = select ? select.value : '';
+  if (!idActividad) {
+    mostrarToast('warning', 'Seleccione una actividad primero.');
+    return;
+  }
+
+  const config = {
+    TEMPLATE_DOC_ID: document.getElementById('certDocTemplateId').value.trim(),
+    DRIVE_FOLDER_ID: document.getElementById('certDriveFolderId').value.trim(),
+    HORAS_DEFAULT: document.getElementById('certHorasDefault').value.trim(),
+    ASUNTO_CORREO: document.getElementById('certAsuntoCorreo').value.trim(),
+    CUERPO_CORREO: document.getElementById('certCuerpoCorreo').value.trim()
+  };
+
+  mostrarToast('info', 'Guardando configuración...');
+  google.script.run
+    .withSuccessHandler((res) => {
+      mostrarToast('success', res.mensaje || 'Plantilla guardada.');
+    })
+    .withFailureHandler((err) => {
+      mostrarToast('error', 'Error al guardar plantilla: ' + err.message);
+    })
+    .webGuardarConfigCertificado(idActividad, config);
+}
+
+function generarCertificadosSeleccionados() {
+  const select = document.getElementById('certActividadSelect');
+  const idActividad = select ? select.value : '';
+  if (!idActividad) {
+    mostrarToast('warning', 'Seleccione una capacitación primero.');
+    return;
+  }
+
+  const templateDocId = document.getElementById('certDocTemplateId').value.trim();
+  if (!templateDocId) {
+    mostrarToast('warning', 'Ingrese el ID del documento de plantilla de Google Docs.');
+    return;
+  }
+
+  const seleccionados = Array.from(document.querySelectorAll('.cert-check-item:checked')).map(c => c.value);
+  if (!seleccionados.length) {
+    mostrarToast('warning', 'Marque al menos un participante para generar certificados.');
+    return;
+  }
+
+  const config = {
+    TEMPLATE_DOC_ID: templateDocId,
+    DRIVE_FOLDER_ID: document.getElementById('certDriveFolderId').value.trim(),
+    HORAS_DEFAULT: document.getElementById('certHorasDefault').value.trim(),
+    ASUNTO_CORREO: document.getElementById('certAsuntoCorreo').value.trim(),
+    CUERPO_CORREO: document.getElementById('certCuerpoCorreo').value.trim()
+  };
+
+  mostrarToast('info', `Generando ${seleccionados.length} certificados en PDF. Esto puede tomar unos segundos...`, 6000);
+  
+  seleccionados.forEach(idPart => {
+    const elStatus = document.getElementById(`cert-status-${idPart}`);
+    if (elStatus) elStatus.innerHTML = '<span class="badge info">Generando PDF...</span>';
+  });
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      if (res && res.resultados) {
+        CERTIFICADOS_GENERADOS = res.resultados;
+        res.resultados.forEach(item => {
+          const elStatus = document.getElementById(`cert-status-${item.idParticipacion}`);
+          const elLink = document.getElementById(`cert-link-${item.idParticipacion}`);
+          if (item.ok) {
+            if (elStatus) elStatus.innerHTML = '<span class="badge success">Generado</span>';
+            if (elLink) elLink.innerHTML = `<a href="${item.urlVisualizacion || item.urlDescarga}" target="_blank" class="btn compact" style="text-decoration:none;">📥 Ver PDF</a>`;
+          } else {
+            if (elStatus) elStatus.innerHTML = `<span class="badge danger" title="${item.error}">Error</span>`;
+          }
+        });
+
+        document.getElementById('btnEnviarEmailsCert').style.display = 'inline-block';
+        mostrarToast('success', `¡Proceso completado! Se generaron ${res.exitosos} diplomas con éxito.`);
+      }
+    })
+    .withFailureHandler((err) => {
+      mostrarToast('error', 'Error al generar certificados: ' + err.message);
+    })
+    .webGenerarCertificadosLote(idActividad, seleccionados, config);
+}
+
+function enviarCertificadosGenerados() {
+  if (!CERTIFICADOS_GENERADOS || !CERTIFICADOS_GENERADOS.length) {
+    mostrarToast('warning', 'Primero genere los certificados antes de enviarlos.');
+    return;
+  }
+
+  const select = document.getElementById('certActividadSelect');
+  const idActividad = select ? select.value : '';
+  const nomActividad = select ? select.options[select.selectedIndex].text : '';
+
+  const plantilla = {
+    asunto: document.getElementById('certAsuntoCorreo').value.trim(),
+    cuerpo: document.getElementById('certCuerpoCorreo').value.trim(),
+    actividad: nomActividad
+  };
+
+  mostrarToast('info', 'Enviando certificados por correo electrónico...');
+  google.script.run
+    .withSuccessHandler((res) => {
+      mostrarToast('success', res.mensaje || 'Correos enviados exitosamente.');
+    })
+    .withFailureHandler((err) => {
+      mostrarToast('error', 'Error al enviar correos: ' + err.message);
+    })
+    .webEnviarCertificadosEmail(idActividad, CERTIFICADOS_GENERADOS, plantilla);
+}
+</script>

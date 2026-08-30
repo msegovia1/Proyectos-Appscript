@@ -1,6 +1,6 @@
 /**
- * WEB APP SIGC 3.6.14
- * Backend compatible con el diseño y las funciones del Index.html principal.
+ * WEB APP SIGC 3.7.0
+ * Backend modular optimizado con soporte para plantillas y nuevos módulos.
  */
 function doGet(e) {
   try {
@@ -8,7 +8,8 @@ function doGet(e) {
   } catch (error) {
     console.error('No se pudieron actualizar actividades vencidas: ' + error.message);
   }
-  return HtmlService.createHtmlOutputFromFile('Index')
+  return HtmlService.createTemplateFromFile('Index')
+    .evaluate()
     .setTitle('Sistema de Gestión de Capacitaciones')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -2389,3 +2390,35 @@ function webAsegurarColumna_(hoja, encabezado) {
   }
   hoja.getRange(1, ultimaColumna + 1).setValue(encabezado);
 }
+
+/**
+ * MÉTODOS PUENTE PARA MÓDULOS DE CERTIFICADOS Y ASISTENCIA QR
+ */
+function webObtenerConfigCertificado(idActividad) {
+  return sigcObtenerConfigCertificado(idActividad);
+}
+
+function webGuardarConfigCertificado(idActividad, config) {
+  return sigcGuardarConfigCertificado(idActividad, config);
+}
+
+function webGenerarCertificadosLote(idActividad, idsParticipantes, config) {
+  return sigcGenerarCertificadosLote(idActividad, idsParticipantes, config);
+}
+
+function webEnviarCertificadosEmail(idActividad, certificados, plantilla) {
+  return sigcEnviarCertificadosEmail(idActividad, certificados, plantilla);
+}
+
+function webGenerarTokenSesionQR(idActividad, numeroSesion, expiraMinutos) {
+  return sigcGenerarTokenSesionQR(idActividad, numeroSesion, expiraMinutos);
+}
+
+function webRegistrarAsistenciaQR(tokenSesion, documentoIdentidad) {
+  return sigcRegistrarAsistenciaQR(tokenSesion, documentoIdentidad);
+}
+
+function webGuardarSpreadsheetId(nuevoId) {
+  return sigcGuardarSpreadsheetId(nuevoId);
+}
+

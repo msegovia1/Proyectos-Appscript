@@ -1,0 +1,2041 @@
+<script>
+let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda:{resumen:{},filas:[],detalle:[]}, graficos:{}, resumen:{}};
+  let GESTION = {actividad:null, participaciones:[], resumen:{}};
+  let COMUNICACIONES = {destinatarios:[], resumen:{}};
+  let DEMANDA_DETALLE_ACTUAL = [];
+  let FORMULARIOS = [];
+  let CAPACIDAD_FORMULARIOS = {};
+  let FORMULARIO_INTERESES = null;
+  let REPORTE = null;
+  let REPORTE_ASISTENCIAS = null;
+  let PAGINA_ASISTENCIAS = 1;
+  const TAMANO_PAGINA_ASISTENCIAS = 50;
+  let TEMPORIZADOR_ASISTENCIAS = null;
+  const DASHBOARD_LOCAL_KEY = 'SIGC_DASHBOARD_CLIENTE_V1';
+  const MODULOS_CARGADOS = new Set();
+  const PAGINACION = {
+    personas:{pagina:1,tamano:50},
+    actividades:{pagina:1,tamano:25},
+    participaciones:{pagina:1,tamano:50}
+  };
+  const TEMPORIZADORES_RENDER = {};
+  let CARGAS_ACTIVAS = 0;
+  let CASOS_REVISION = [];
+  let CONFIG_REVISION_ACTIVA = '';
+  let CASO_REVISION_ACTIVO = null;
+  let NUEVOS_INTERESES = [];
+  let IMPORTACION = {encabezados:[], filas:[], mapeo:{}, analisis:null, historial:[], baseMadre:null};
+  const COMUNICACION_SELECCIONADOS = new Set();
+  const GESTION_SELECCIONADOS = new Set();
+  const GESTION_MODIFICADOS = new Set();
+  const charts = {};
+  document.querySelectorAll('.menu button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.menu button').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.view).classList.add('active');
+      document.getElementById('tituloVista').textContent = btn.textContent.replace(/^[^A-Za-zÁÉÍÓÚÑ]+/, '').trim();
+      cargarVistaBajoDemanda(btn.dataset.view);
+    });
+  });
+  function cargarDatos(forzar=false) {
+    const inicioCarga = performance.now();
+    const resumenLocal = !forzar && cargarDashboardLocal_();
+    mostrarCarga(!resumenLocal);
+    google.script.run
+      .withSuccessHandler(datos => {
+        DB.resumen = datos.resumen || {};
+        DB.graficos = datos.graficos || {};
+        const segundos = ((performance.now() - inicioCarga) / 1000).toFixed(1);
+        document.getElementById('ultimaActualizacion').textContent =
+          (datos.desdeResumenPersistente ? 'Resumen guardado: ' : 'Actualizado: ') +
+          datos.fechaActualizacion + ' · carga ' + segundos + ' s';
+        renderDashboard();
+        guardarDashboardLocal_(datos);
+        mostrarCarga(false);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .obtenerDashboardLiviano(forzar === true);
+  }
+  function cargarDashboardLocal_() {
+    try {
+      const guardado = localStorage.getItem(DASHBOARD_LOCAL_KEY);
+      if (!guardado) return false;
+      const datos = JSON.parse(guardado);
+      if (!datos || !datos.resumen || !datos.graficos) return false;
+      DB.resumen = datos.resumen;
+      DB.graficos = datos.graficos;
+      document.getElementById('ultimaActualizacion').textContent =
+        'Resumen local: ' + (datos.fechaActualizacion || 'sin fecha');
+      renderDashboard();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+  function guardarDashboardLocal_(datos) {
+    try {
+      localStorage.setItem(DASHBOARD_LOCAL_KEY, JSON.stringify({
+        fechaActualizacion: datos.fechaActualizacion,
+        resumen: datos.resumen || {},
+        graficos: datos.graficos || {}
+      }));
+    } catch (error) {
+      // El almacenamiento local es una mejora opcional, no una dependencia.
+    }
+  }
+  function renderDashboard() {
+    const r = DB.resumen;
+    texto('kpiPersonas', r.totalPersonas);
+    texto('kpiActividades', r.totalActividades);
+    texto('kpiActivas', r.actividadesActivas);
+    texto('kpiParticipaciones', r.totalParticipaciones);
+    texto('kpiEfectiva', r.participacionEfectiva || 0);
+    texto('kpiAprobacion', formatoPorcentaje(r.tasaAprobacion));
+    texto('kpiTasaParticipacion', formatoPorcentaje(r.tasaParticipacion));
+    texto('kpiCupos', r.cuposOfrecidos || 0);
+    texto('kpiSeleccion', formatoPorcentaje(r.tasaSeleccion));
+    texto('kpiAsistencia', formatoPorcentaje(r.tasaAsistencia));
+    texto('kpiCertificacion', formatoPorcentaje(r.tasaCertificacion));
+    texto('kpiBrecha', r.brechaDemanda || 0);
+    renderGraficos();
+  }
+  function cargarVistaBajoDemanda(vista) {
+    if (vista === 'dashboard') return;
+    if (vista === 'formularios') {
+      asegurarModulo('actividades', cargarFormularios);
+      return;
+    }
+    if (vista === 'importaciones') {
+      asegurarModulo('actividades', cargarImportaciones);
+      return;
+    }
+    if (vista === 'reportes') {
+      asegurarModulo('actividades');
+      return;
+    }
+    const mapa = {personas:'personas', actividades:'actividades', participaciones:'participaciones',
+      demanda:'demanda', gestion:'actividades', comunicaciones:'actividades', registros:'catalogos'};
+    if (mapa[vista]) asegurarModulo(mapa[vista]);
+  }
+  function asegurarModulo(modulo, alTerminar) {
+    if (MODULOS_CARGADOS.has(modulo)) { if (alTerminar) alTerminar(); return; }
+    mostrarCarga(true, 'Preparando módulo…');
+    google.script.run.withSuccessHandler(datos => {
+      Object.assign(DB, datos || {});
+      MODULOS_CARGADOS.add(modulo);
+      if (modulo === 'personas') renderPersonas();
+      if (modulo === 'actividades') renderActividades();
+      if (modulo === 'participaciones') { renderPersonas(); renderActividades(); renderParticipaciones(); llenarSelectores(); MODULOS_CARGADOS.add('personas'); MODULOS_CARGADOS.add('actividades'); }
+      if (modulo === 'demanda') renderDemanda();
+      if (modulo === 'actividades') llenarSelectores();
+      if (modulo === 'catalogos') {
+        MODULOS_CARGADOS.add('personas');
+        MODULOS_CARGADOS.add('actividades');
+        llenarSelectores();
+      }
+      mostrarCarga(false);
+      if (alTerminar) alTerminar();
+    }).withFailureHandler(error => { mostrarCarga(false); notificar(error.message || String(error), true); })
+      .obtenerDatosModulo(modulo);
+  }
+  function renderGraficos() {
+    if (typeof Chart === 'undefined') return;
+    crearGrafico('chartEstados', 'doughnut', DB.graficos.actividadesPorEstado);
+    crearGrafico('chartResultados', 'doughnut', DB.graficos.resultados);
+    crearGrafico('chartAreas', 'bar', DB.graficos.actividadesPorArea.slice(0,10));
+    crearGrafico('chartParticipaciones', 'bar', DB.graficos.participacionesPorActividad.slice(0,10), true);
+    crearGrafico('chartEfectiva', 'bar', DB.graficos.participacionEfectivaPorActividad.slice(0,10), true);
+  }
+  function crearGrafico(id, tipo, datos, horizontal=false) {
+    if (charts[id]) charts[id].destroy();
+    charts[id] = new Chart(document.getElementById(id), {
+      type: tipo,
+      data: {
+        labels: datos.map(x => x.nombre),
+        datasets: [{
+          data: datos.map(x => x.valor),
+          backgroundColor: ['#1f5f91','#2d8a62','#f1b82d','#c6383e','#6e54a3','#3a8da8','#7a9b45','#d17838','#516273','#9c5674']
+        }]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        indexAxis: horizontal ? 'y' : 'x',
+        plugins:{ legend:{ display: tipo === 'doughnut', position:'bottom' } },
+        scales: tipo === 'bar' ? { y: horizontal ? {} : {beginAtZero:true, ticks:{precision:0}}, x: horizontal ? {beginAtZero:true, ticks:{precision:0}} : {} } : {}
+      }
+    });
+  }
+  function renderPersonas() {
+    const q = normalizar(document.getElementById('buscarPersonas')?.value || '');
+    const filas = DB.personas.filter(p => normalizar([
+      p.NOMBRE_COMPLETO,p.RUT,p.DOCUMENTO,p.FECHA_NACIMIENTO,p.EDAD,
+      p.CORREO,p.TELEFONO,p.COMUNA,p.BARRIO,p.PARTICIPA_PMJH
+    ].join(' ')).includes(q));
+    const visibles = paginarFilas_('personas', filas);
+    document.getElementById('tablaPersonas').innerHTML = visibles.length ? visibles.map(p => `<tr>
+      <td>${esc(p.ID_PERSONA)}</td>
+      <td>${esc(p.DOCUMENTO || p.RUT)}</td>
+      <td><strong>${esc(p.NOMBRE_COMPLETO)}</strong></td>
+      <td>${esc(fechaPersonaVisible(p.FECHA_NACIMIENTO))}</td>
+      <td>${esc(edadVisible(p.EDAD))}</td>
+      <td>${esc(p.CORREO)}</td>
+      <td>${esc(p.TELEFONO)}</td>
+      <td>${esc(p.COMUNA)}</td>
+      <td>${esc(p.BARRIO)}</td>
+      <td><span class="badge">${esc(p.PARTICIPA_PMJH || 'No informado')}</span></td>
+      <td><span class="badge">${esc(p.ESTADO_CONTACTO || 'No informado')}</span></td>
+      <td><button class="btn secondary compact" type="button" data-id="${esc(p.ID_PERSONA)}" onclick="abrirEdicionPersona(this.dataset.id)">Editar</button></td>
+    </tr>`).join('') : '<tr><td colspan="12" class="empty-state">No se encontraron personas.</td></tr>';
+  }
+  function renderActividades() {
+    const q = normalizar(document.getElementById('buscarActividades')?.value || '');
+    const estado = document.getElementById('filtroEstado')?.value || '';
+    const mostrarArchivadas = document.getElementById('mostrarActividadesArchivadas')?.checked === true;
+    const filas = DB.actividades.filter(a =>
+      normalizar([a.NOMBRE_ACTIVIDAD,a.TIPO_ACTIVIDAD,a.PROGRAMA,a.AREA_TEMATICA].join(' ')).includes(q) &&
+      (!estado || a.ESTADO_ACTIVIDAD === estado) &&
+      (mostrarArchivadas || normalizar(estado) === 'archivada' || !esActividadArchivada_(a))
+    );
+    const visibles = paginarFilas_('actividades', filas);
+    document.getElementById('tablaActividades').innerHTML = visibles.length ? visibles.map(a => `<tr>
+      <td>${esc(a.ID_ACTIVIDAD)}</td><td><strong>${esc(a.NOMBRE_ACTIVIDAD)}</strong></td><td>${esc(a.TIPO_ACTIVIDAD)}</td>
+      <td>${esc(a.PROGRAMA)}</td><td>${esc(a.AREA_TEMATICA)}</td><td>${esc(a.ANO)}</td><td>${esc(a.SESIONES_TOTALES)}</td>
+      <td><span class="badge">${esc(a.ESTADO_ACTIVIDAD)}</span></td>
+      <td><div class="bulkbar"><button class="btn secondary compact" type="button" data-id="${esc(a.ID_ACTIVIDAD)}" onclick="abrirEdicionActividad(this.dataset.id)">Editar</button>${esActividadArchivada_(a) ? '' : `<button class="btn danger compact" type="button" data-id="${esc(a.ID_ACTIVIDAD)}" onclick="solicitarQuitarActividad(this.dataset.id)">Quitar</button>`}</div></td>
+    </tr>`).join('') : '<tr><td colspan="9" class="empty-state">No se encontraron actividades.</td></tr>';
+    const filtro = document.getElementById('filtroEstado');
+    if (filtro && filtro.options.length === 1) {
+      [...new Set(DB.actividades.map(a => a.ESTADO_ACTIVIDAD).filter(Boolean))].sort()
+        .forEach(e => filtro.insertAdjacentHTML('beforeend', `<option>${esc(e)}</option>`));
+    }
+  }
+  function renderParticipaciones() {
+    const q = normalizar(document.getElementById('buscarParticipaciones')?.value || '');
+    const filas = DB.participaciones.filter(p =>
+      normalizar([p.NOMBRE_COMPLETO,p.RUT,p.DOCUMENTO,p.EDAD,p.PARTICIPA_PMJH,p.NOMBRE_ACTIVIDAD,p.RESULTADO_FINAL].join(' ')).includes(q)
+    );
+    const visibles = paginarFilas_('participaciones', filas);
+    document.getElementById('tablaParticipaciones').innerHTML = visibles.length ? visibles.map(p => `<tr>
+      <td>${esc(p.ID_PARTICIPACION)}</td><td><strong>${esc(p.NOMBRE_COMPLETO)}</strong></td><td>${esc(p.DOCUMENTO || p.RUT)}</td>
+      <td>${esc(edadVisible(p.EDAD))}</td>
+      <td><span class="badge">${esc(p.PARTICIPA_PMJH || 'No informado')}</span></td>
+      <td>${esc(p.NOMBRE_ACTIVIDAD)}</td><td>${esc(p.ESTADO_SELECCION)}</td><td>${esc(p.PORCENTAJE_ASISTENCIA)}</td>
+      <td><span class="badge">${esc(p.RESULTADO_FINAL)}</span></td><td>${esc(p.ULTIMA_ACTUALIZACION)}</td></tr>`).join('') : '<tr><td colspan="10" class="empty-state">No se encontraron participaciones.</td></tr>';
+  }
+  function paginarFilas_(tipo, filas) {
+    const estado = PAGINACION[tipo];
+    const paginas = Math.max(1, Math.ceil(filas.length / estado.tamano));
+    estado.pagina = Math.min(Math.max(1, estado.pagina), paginas);
+    const inicio = (estado.pagina - 1) * estado.tamano;
+    const info = document.getElementById(`pagina${tipo.charAt(0).toUpperCase() + tipo.slice(1)}Info`);
+    if (info) {
+      const desde = filas.length ? inicio + 1 : 0;
+      const hasta = Math.min(inicio + estado.tamano, filas.length);
+      info.textContent = `${desde}–${hasta} de ${filas.length}`;
+    }
+    return filas.slice(inicio, inicio + estado.tamano);
+  }
+  function cambiarPagina(tipo, delta) {
+    PAGINACION[tipo].pagina += delta;
+    ({personas:renderPersonas, actividades:renderActividades, participaciones:renderParticipaciones})[tipo]();
+  }
+  function reiniciarYRenderizar(tipo) {
+    PAGINACION[tipo].pagina = 1;
+    ({personas:renderPersonas, actividades:renderActividades, participaciones:renderParticipaciones})[tipo]();
+  }
+  function renderConPausa(tipo) {
+    clearTimeout(TEMPORIZADORES_RENDER[tipo]);
+    TEMPORIZADORES_RENDER[tipo] = setTimeout(() => reiniciarYRenderizar(tipo), 220);
+  }
+  function llenarSelectores() {
+    document.getElementById('selectPersona').innerHTML = '<option value="">Seleccione...</option>' +
+      DB.personas.slice().sort((a,b)=>a.NOMBRE_COMPLETO.localeCompare(b.NOMBRE_COMPLETO))
+        .map(p => {
+          const edad = p.EDAD === '' || p.EDAD === null || p.EDAD === undefined
+            ? ''
+            : ` — ${esc(p.EDAD)} años`;
+          return `<option value="${esc(p.ID_PERSONA)}">${esc(p.NOMBRE_COMPLETO)} — ${esc(p.DOCUMENTO || p.RUT)}${edad} — PMJH: ${esc(p.PARTICIPA_PMJH || 'No informado')}</option>`;
+        }).join('');
+    // El registro manual mantiene el orden alfabético para facilitar la búsqueda.
+    const actividadesOperativas = DB.actividades.filter(a => !esActividadArchivada_(a));
+    const opcionesActividadesRegistro = actividadesOperativas.slice()
+      .sort((a,b)=>String(a.NOMBRE_ACTIVIDAD || '').localeCompare(String(b.NOMBRE_ACTIVIDAD || ''), 'es'))
+      .map(a => `<option value="${esc(a.ID_ACTIVIDAD)}">${esc(a.NOMBRE_ACTIVIDAD)} — ${esc(a.ID_ACTIVIDAD)}</option>`).join('');
+    // En Gestión de participantes se muestran primero las actividades más nuevas.
+    // Este mismo orden se usa al vincular formularios para que las actividades
+    // recién creadas sigan siendo fáciles de encontrar cuando el catálogo crezca.
+    // La prioridad es: año y correlativo del ID; luego fecha de inicio y orden de ingreso.
+    const opcionesActividadesGestion = actividadesOperativas
+      .map((actividad, indice) => ({...actividad, _ordenIngreso: indice}))
+      .sort(compararActividadesRecientes)
+      .map(a => {
+        const fecha = fechaActividadVisible(a.FECHA_INICIO);
+        return `<option value="${esc(a.ID_ACTIVIDAD)}">${esc(a.ID_ACTIVIDAD)} — ${esc(a.NOMBRE_ACTIVIDAD)}${fecha ? ` — ${esc(fecha)}` : ''}</option>`;
+      }).join('');
+    document.getElementById('selectActividad').innerHTML =
+      '<option value="">Seleccione...</option>' + opcionesActividadesRegistro;
+    document.getElementById('gestionActividad').innerHTML =
+      '<option value="">Seleccione una actividad...</option>' + opcionesActividadesGestion;
+    document.getElementById('comActividad').innerHTML =
+      '<option value="">Seleccione una actividad...</option>' + opcionesActividadesGestion;
+    const selectorFormulario = document.getElementById('formularioActividad');
+    if (selectorFormulario) {
+      selectorFormulario.innerHTML =
+        '<option value="">Seleccione una actividad...</option>' + opcionesActividadesGestion;
+    }
+    const selectorImportacion = document.getElementById('importActividad');
+    if (selectorImportacion) {
+      selectorImportacion.innerHTML =
+        '<option value="">Seleccione una actividad...</option>' + opcionesActividadesGestion;
+    }
+    actualizarActividadAsistenciaSeleccionada();
+  
+  // Poblar selectores de nuevos modulos (Certificados y Asistencia QR)
+  const certSelect = document.getElementById('certActividadSelect');
+  const qrSelect = document.getElementById('qrActividadSelect');
+  if (certSelect || qrSelect) {
+    const opcionesActividades = actividades.map(function(a) {
+      return '<option value="' + a.ID_ACTIVIDAD + '">' + (a.NOMBRE_ACTIVIDAD || a.ID_ACTIVIDAD) + '</option>';
+    }).join('');
+    if (certSelect) certSelect.innerHTML = '<option value="">Seleccione una actividad...</option>' + opcionesActividades;
+    if (qrSelect) qrSelect.innerHTML = '<option value="">Seleccione una actividad...</option>' + opcionesActividades;
+  }
+}
+  function esActividadArchivada_(actividad) {
+    return normalizar(actividad?.ESTADO_ACTIVIDAD) === 'archivada';
+  }
+  function compararActividadesRecientes(a, b) {
+    const claveA = claveCorrelativaActividad(a.ID_ACTIVIDAD);
+    const claveB = claveCorrelativaActividad(b.ID_ACTIVIDAD);
+    const anioA = Number(a.ANO || claveA.anio || 0);
+    const anioB = Number(b.ANO || claveB.anio || 0);
+    if (anioA !== anioB) return anioB - anioA;
+    if (claveA.numero !== claveB.numero) return claveB.numero - claveA.numero;
+    const fechaA = fechaActividadNumero(a.FECHA_INICIO);
+    const fechaB = fechaActividadNumero(b.FECHA_INICIO);
+    if (fechaA !== fechaB) return fechaB - fechaA;
+    return Number(b._ordenIngreso || 0) - Number(a._ordenIngreso || 0);
+  }
+  function claveCorrelativaActividad(idActividad) {
+    const texto = String(idActividad || '').trim().toUpperCase();
+    const coincidencia = texto.match(/(\d{4})\D+(\d+)\s*$/);
+    if (coincidencia) {
+      return {anio: Number(coincidencia[1]) || 0, numero: Number(coincidencia[2]) || 0};
+    }
+    const numeros = texto.match(/\d+/g) || [];
+    return {
+      anio: Number(numeros.length > 1 ? numeros[numeros.length - 2] : 0) || 0,
+      numero: Number(numeros.length ? numeros[numeros.length - 1] : 0) || 0
+    };
+  }
+  function fechaActividadNumero(valor) {
+    const texto = String(valor || '').trim();
+    if (!texto) return 0;
+    let coincidencia = texto.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (coincidencia) {
+      return new Date(Number(coincidencia[1]), Number(coincidencia[2]) - 1, Number(coincidencia[3])).getTime();
+    }
+    coincidencia = texto.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+    if (coincidencia) {
+      return new Date(Number(coincidencia[3]), Number(coincidencia[2]) - 1, Number(coincidencia[1])).getTime();
+    }
+    const fecha = new Date(texto);
+    return Number.isNaN(fecha.getTime()) ? 0 : fecha.getTime();
+  }
+  function fechaActividadVisible(valor) {
+    const texto = String(valor || '').trim();
+    if (!texto) return '';
+    let coincidencia = texto.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (coincidencia) {
+      return `${String(coincidencia[3]).padStart(2,'0')}-${String(coincidencia[2]).padStart(2,'0')}-${coincidencia[1]}`;
+    }
+    coincidencia = texto.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+    if (coincidencia) {
+      return `${String(coincidencia[1]).padStart(2,'0')}-${String(coincidencia[2]).padStart(2,'0')}-${coincidencia[3]}`;
+    }
+    return texto;
+  }
+  const AREAS_POR_LINEA = Object.freeze({
+    Emprendimiento: [
+      'Gestión del emprendimiento',
+      'Modelo de negocio y planificación',
+      'Marketing, ventas y comercialización',
+      'Finanzas, costos y contabilidad',
+      'Formalización y aspectos tributarios',
+      'Comercio electrónico',
+      'Transformación digital',
+      'Innovación y desarrollo de productos',
+      'Sustentabilidad y economía circular',
+      'Cooperativismo y asociatividad',
+      'Acceso a financiamiento',
+      'Otra área de emprendimiento'
+    ],
+    Empleo: [
+      'Oficios',
+      'Empleabilidad y búsqueda de trabajo',
+      'Currículum y entrevista laboral',
+      'Habilidades laborales',
+      'Comunicación efectiva',
+      'Liderazgo y trabajo en equipo',
+      'Atención de público y servicio al cliente',
+      'Alfabetización digital',
+      'Ofimática',
+      'Herramientas digitales para el trabajo',
+      'Derechos laborales',
+      'Seguridad y prevención de riesgos',
+      'Otra área de empleo'
+    ],
+    Transversal: [
+      'Alfabetización digital',
+      'Ofimática',
+      'Comunicación efectiva',
+      'Liderazgo',
+      'Trabajo en equipo',
+      'Desarrollo personal',
+      'Inclusión y diversidad',
+      'Perspectiva de género',
+      'Sustentabilidad',
+      'Innovación',
+      'Gestión de proyectos',
+      'Participación y vinculación territorial',
+      'Otra área transversal'
+    ]
+  });
+  function poblarAreas(selectorId, linea, incluirTodas=false) {
+    const selector = document.getElementById(selectorId);
+    if (!selector) return;
+    const opciones = AREAS_POR_LINEA[linea] || [];
+    const primera = incluirTodas
+      ? '<option value="">Todas</option>'
+      : '<option value="">Seleccione un área temática...</option>';
+    selector.innerHTML = primera + opciones.map(area => `<option value="${esc(area)}">${esc(area)}</option>`).join('');
+    selector.disabled = !incluirTodas && opciones.length === 0;
+  }
+  function actualizarAreasPersonaInteres() {
+    poblarAreas('personaInteresArea', document.getElementById('personaInteresEscuela')?.value || '', false);
+  }
+  function agregarInteresNuevaPersona() {
+    const linea = document.getElementById('personaInteresEscuela')?.value || '';
+    const area = document.getElementById('personaInteresArea')?.value || '';
+    if (!linea || !area) return notificar('Seleccione una escuela / línea y un área temática.', true);
+    const clave = normalizar(linea) + '|' + normalizar(area);
+    if (NUEVOS_INTERESES.some(x => normalizar(x.ESCUELA_LINEA) + '|' + normalizar(x.AREA_TEMATICA) === clave)) {
+      return notificar('Ese interés ya fue agregado.', true);
+    }
+    NUEVOS_INTERESES.push({ESCUELA_LINEA: linea, AREA_TEMATICA: area});
+    renderInteresesNuevaPersona();
+  }
+  function quitarInteresNuevaPersona(indice) {
+    NUEVOS_INTERESES.splice(Number(indice), 1);
+    renderInteresesNuevaPersona();
+  }
+  function renderInteresesNuevaPersona() {
+    const contenedor = document.getElementById('personaInteresesSeleccionados');
+    if (!contenedor) return;
+    contenedor.innerHTML = NUEVOS_INTERESES.length
+      ? NUEVOS_INTERESES.map((x, i) => `<div style="margin:5px 0"><span class="badge">${esc(x.ESCUELA_LINEA)} · ${esc(x.AREA_TEMATICA)}</span> <button class="btn secondary compact" type="button" onclick="quitarInteresNuevaPersona(${i})">Quitar</button></div>`).join('')
+      : 'Sin intereses agregados. Este dato es opcional.';
+  }
+  function actualizarFiltroAreasDemanda() {
+    const linea = document.getElementById('filtroDemandaEscuela')?.value || '';
+    const selector = document.getElementById('filtroDemandaArea');
+    if (!selector) return;
+    const areas = linea
+      ? (AREAS_POR_LINEA[linea] || [])
+      : [...new Set(Object.values(AREAS_POR_LINEA).flat())].sort((a,b)=>a.localeCompare(b,'es'));
+    selector.innerHTML = '<option value="">Todas las áreas temáticas</option>' +
+      areas.map(area => `<option value="${esc(area)}">${esc(area)}</option>`).join('');
+  }
+  function actualizarAreasComunicacion() {
+    poblarAreas('comArea', document.getElementById('comEscuela')?.value || '', true);
+  }
+  function actualizarAreasReporte() {
+    const linea = document.getElementById('repEscuela')?.value || '';
+    const selector = document.getElementById('repArea');
+    if (!selector) return;
+    const areas = linea
+      ? (AREAS_POR_LINEA[linea] || [])
+      : [...new Set(Object.values(AREAS_POR_LINEA).flat())].sort((a,b)=>a.localeCompare(b,'es'));
+    selector.innerHTML = '<option value="">Todas</option>' +
+      areas.map(area => `<option value="${esc(area)}">${esc(area)}</option>`).join('');
+    selector.value = '';
+  }
+
+  function renderDemanda() {
+    const demanda = DB.demanda || {resumen:{}, filas:[], detalle:[]};
+    const r = demanda.resumen || {};
+    texto('dPersonas', r.personasConDemanda || 0);
+    texto('dIntereses', r.interesesActivos || 0);
+    texto('dAtendidas', r.demandasAtendidas || 0);
+    texto('dPendientes', r.demandasPendientes || 0);
+    texto('dCobertura', formatoPorcentaje(r.cobertura || 0));
+    const gd = demanda.graficos || {};
+    crearGrafico('chartDemandaEscuela', 'doughnut', gd.porEscuela || []);
+    crearGrafico('chartDemandaAreas', 'bar', gd.rankingAreas || [], true);
+    const q = normalizar(document.getElementById('buscarDemanda')?.value || '');
+    const escuela = normalizar(document.getElementById('filtroDemandaEscuela')?.value || '');
+    const area = normalizar(document.getElementById('filtroDemandaArea')?.value || '');
+    const filas = (demanda.filas || []).filter(f =>
+      (!escuela || normalizar(f.ESCUELA_LINEA) === escuela) &&
+      (!area || normalizar(f.AREA_TEMATICA) === area) &&
+      normalizar([f.ESCUELA_LINEA,f.AREA_TEMATICA].join(' ')).includes(q)
+    );
+    const tbody = document.getElementById('tablaDemanda');
+    if (!tbody) return;
+    tbody.innerHTML = filas.length ? filas.map(f => `<tr>
+      <td>${esc(f.ESCUELA_LINEA)}</td><td><strong>${esc(f.AREA_TEMATICA)}</strong></td>
+      <td>${esc(f.DEMANDANTES)}</td><td>${esc(f.ACTIVIDADES_OFERTADAS)}</td><td>${esc(f.INSCRITOS)}</td>
+      <td>${esc(f.SELECCIONADOS)}</td><td>${esc(f.CAPACITADAS)}</td><td>${esc(f.PENDIENTES)}</td>
+      <td><span class="badge">${esc(formatoPorcentaje(f.COBERTURA))}</span></td>
+      <td><button class="btn secondary compact" type="button" data-clave="${esc(f.CLAVE)}" onclick="verDetalleDemanda(this.dataset.clave)">Ver personas</button></td>
+    </tr>`).join('') : '<tr><td colspan="10" class="empty-state">Aún no hay intereses registrados que coincidan con el filtro.</td></tr>';
+  }
+  function verDetalleDemanda(clave) {
+    const fila = (DB.demanda?.filas || []).find(f => String(f.CLAVE) === String(clave));
+    const detalle = (DB.demanda?.detalle || []).filter(p =>
+      normalizar(p.ESCUELA_LINEA) + '|' + normalizar(p.AREA_TEMATICA) === String(clave)
+    );
+    document.getElementById('detalleDemandaTitulo').textContent = fila
+      ? `${fila.ESCUELA_LINEA} — ${fila.AREA_TEMATICA}`
+      : 'Detalle de demanda';
+    DEMANDA_DETALLE_ACTUAL = detalle;
+    const correos = correosUnicosValidos_(detalle);
+    texto('resumenCorreosDemanda', `${detalle.length} personas · ${correos.length} correos válidos y únicos disponibles.`);
+    const botonCorreos = document.getElementById('copiarCorreosDemandaBtn');
+    if (botonCorreos) {
+      botonCorreos.disabled = correos.length === 0;
+      botonCorreos.textContent = correos.length ? `Copiar ${correos.length} correos` : 'Sin correos para copiar';
+    }
+    document.getElementById('tablaDetalleDemanda').innerHTML = detalle.map(p => `<tr>
+      <td><strong>${esc(p.NOMBRE_COMPLETO)}</strong></td><td>${esc(p.CORREO || 'Sin correo')}</td><td>${esc(p.COMUNA)}</td>
+      <td><span class="badge">${esc(p.CAPACITADA === 'Sí' ? 'Cubierta' : 'Pendiente')}</span></td></tr>`).join('') ||
+      '<tr><td colspan="4" class="empty-state">No hay personas para mostrar.</td></tr>';
+    document.getElementById('detalleDemanda').hidden = false;
+    document.getElementById('detalleDemanda').scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+  function cerrarDetalleDemanda() {
+    document.getElementById('detalleDemanda').hidden = true;
+    DEMANDA_DETALLE_ACTUAL = [];
+  }
+  async function copiarCorreosDetalleDemanda() {
+    const correos = correosUnicosValidos_(DEMANDA_DETALLE_ACTUAL);
+    if (!correos.length) return notificar('Esta temática no tiene correos válidos para copiar.', true);
+    await copiarTextoPortapapeles_(correos.join('; '));
+    notificar('Se copiaron ' + correos.length + ' correos de esta demanda.');
+  }
+
+  function actualizarControlesComunicacion() {
+    const fuente = document.getElementById('comFuente')?.value || 'actividad';
+    document.querySelectorAll('.com-actividad').forEach(el => el.hidden = fuente !== 'actividad');
+    document.querySelectorAll('.com-interes').forEach(el => el.hidden = fuente !== 'interes');
+  }
+  function buscarDestinatarios() {
+    const fuente = document.getElementById('comFuente').value;
+    if (fuente === 'actividad' && !document.getElementById('comActividad').value) {
+      return notificar('Seleccione una actividad.', true);
+    }
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(datos => {
+        COMUNICACIONES = datos;
+        COMUNICACION_SELECCIONADOS.clear();
+        (datos.destinatarios || []).filter(p => p.CORREO).forEach(p => COMUNICACION_SELECCIONADOS.add(String(p.ID_PERSONA)));
+        texto('cPersonas', datos.resumen?.personas || 0);
+        texto('cConCorreo', datos.resumen?.conCorreo || 0);
+        texto('cSinCorreo', datos.resumen?.sinCorreo || 0);
+        renderComunicaciones();
+        mostrarCarga(false);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .obtenerDestinatariosComunicacion({
+        fuente: fuente,
+        idActividad: document.getElementById('comActividad').value,
+        grupo: document.getElementById('comGrupo').value,
+        escuelaLinea: document.getElementById('comEscuela').value,
+        areaTematica: document.getElementById('comArea').value,
+        comuna: document.getElementById('comComuna').value,
+        soloPendientes: document.getElementById('comSoloPendientes').checked,
+        soloAutorizados: document.getElementById('comSoloAutorizados').checked
+      });
+  }
+  function destinatariosVisibles() {
+    const q = normalizar(document.getElementById('buscarComunicacion')?.value || '');
+    return (COMUNICACIONES.destinatarios || []).filter(p =>
+      normalizar([p.NOMBRE_COMPLETO,p.CORREO,p.COMUNA].join(' ')).includes(q)
+    );
+  }
+  function renderComunicaciones() {
+    const tbody = document.getElementById('tablaComunicaciones');
+    if (!tbody) return;
+    const filas = destinatariosVisibles();
+    tbody.innerHTML = filas.length ? filas.map(p => `<tr>
+      <td><input type="checkbox" ${COMUNICACION_SELECCIONADOS.has(String(p.ID_PERSONA)) ? 'checked' : ''} ${p.CORREO ? '' : 'disabled'} data-id="${esc(p.ID_PERSONA)}" onchange="cambiarSeleccionComunicacion(this)"></td>
+      <td><strong>${esc(p.NOMBRE_COMPLETO)}</strong></td><td>${esc(p.CORREO || 'Sin correo')}</td><td>${esc(p.COMUNA)}</td>
+      <td><span class="badge">${esc(p.AUTORIZA_CONTACTO)}</span></td><td>${esc(p.DEMANDA_PENDIENTE || '—')}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty-state">No hay personas que coincidan con el segmento o filtro.</td></tr>';
+    actualizarResumenSeleccionComunicacion_();
+  }
+  function cambiarSeleccionComunicacion(check) {
+    const id = String(check.dataset.id || '');
+    if (check.checked) COMUNICACION_SELECCIONADOS.add(id);
+    else COMUNICACION_SELECCIONADOS.delete(id);
+    actualizarResumenSeleccionComunicacion_();
+  }
+  function marcarTodosComunicacion(marcar) {
+    destinatariosVisibles().forEach(p => {
+      if (!p.CORREO) return;
+      const id = String(p.ID_PERSONA || '');
+      if (marcar) COMUNICACION_SELECCIONADOS.add(id);
+      else COMUNICACION_SELECCIONADOS.delete(id);
+    });
+    renderComunicaciones();
+  }
+  function seleccionarCantidadComunicacion() {
+    const entrada = document.getElementById('comCantidad');
+    const cantidad = Number(entrada?.value || 0);
+    if (!Number.isInteger(cantidad) || cantidad < 1) {
+      return notificar('Ingrese una cantidad válida de personas.', true);
+    }
+    const disponibles = [];
+    const correosVistos = new Set();
+    destinatariosVisibles().forEach(p => {
+      const correo = String(p.CORREO || '').trim().toLowerCase();
+      if (!correoEsValidoCliente_(correo) || correosVistos.has(correo)) return;
+      correosVistos.add(correo);
+      disponibles.push(p);
+    });
+    COMUNICACION_SELECCIONADOS.clear();
+    disponibles.slice(0, cantidad).forEach(p => COMUNICACION_SELECCIONADOS.add(String(p.ID_PERSONA)));
+    renderComunicaciones();
+    const seleccionadas = Math.min(cantidad, disponibles.length);
+    notificar(seleccionadas < cantidad
+      ? `Se seleccionaron las ${seleccionadas} personas más recientes: no hay más correos únicos disponibles en el resultado visible.`
+      : `Se seleccionaron las ${seleccionadas} personas más recientes con correo.`);
+  }
+  function actualizarResumenSeleccionComunicacion_() {
+    const seleccionadas = (COMUNICACIONES.destinatarios || []).filter(p =>
+      COMUNICACION_SELECCIONADOS.has(String(p.ID_PERSONA))
+    );
+    const cantidad = correosUnicosValidos_(seleccionadas).length;
+    texto('comSeleccionInfo', `${cantidad} ${cantidad === 1 ? 'correo seleccionado' : 'correos seleccionados'}`);
+  }
+  async function copiarCorreosCCO() {
+    const correos = correosUnicosValidos_((COMUNICACIONES.destinatarios || [])
+      .filter(p => COMUNICACION_SELECCIONADOS.has(String(p.ID_PERSONA))));
+    if (!correos.length) return notificar('No hay correos seleccionados para copiar.', true);
+    await copiarTextoPortapapeles_(correos.join('; '));
+    notificar('Se copiaron ' + correos.length + ' correos para CCO.');
+  }
+  function correoEsValidoCliente_(correo) {
+    return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(correo || '').trim());
+  }
+  function correosUnicosValidos_(personas) {
+    return [...new Set((personas || [])
+      .map(p => String(p.CORREO || '').trim().toLowerCase())
+      .filter(correoEsValidoCliente_))];
+  }
+  async function copiarTextoPortapapeles_(contenido) {
+    try {
+      await navigator.clipboard.writeText(contenido);
+    } catch (error) {
+      const auxiliar = document.createElement('textarea');
+      auxiliar.value = contenido;
+      document.body.appendChild(auxiliar);
+      auxiliar.select();
+      document.execCommand('copy');
+      auxiliar.remove();
+    }
+  }
+  function actualizarAreasActividad() {
+    const linea = document.getElementById('escuelaLineaActividad')?.value || '';
+    const selectorArea = document.getElementById('areaTematicaActividad');
+    if (!selectorArea) return;
+    const opciones = AREAS_POR_LINEA[linea] || [];
+    selectorArea.innerHTML = opciones.length
+      ? '<option value="">Seleccione un área temática...</option>' +
+        opciones.map(area => `<option value="${esc(area)}">${esc(area)}</option>`).join('')
+      : '<option value="">Primero seleccione una escuela o línea...</option>';
+    selectorArea.disabled = opciones.length === 0;
+    selectorArea.value = '';
+  }
+  function actualizarAreasEdicionActividad(valorActual='') {
+    const linea = document.getElementById('editarEscuelaLinea')?.value || '';
+    const selectorArea = document.getElementById('editarAreaTematica');
+    if (!selectorArea) return;
+    const opciones = (AREAS_POR_LINEA[linea] || []).slice();
+    const actual = String(valorActual || '').trim();
+    if (actual && !opciones.includes(actual)) {
+      opciones.unshift(actual);
+    }
+    selectorArea.innerHTML = opciones.length
+      ? '<option value="">Seleccione un área temática...</option>' +
+        opciones.map(area => `<option value="${esc(area)}">${esc(area)}</option>`).join('')
+      : '<option value="">Primero seleccione una escuela o línea...</option>';
+    selectorArea.disabled = opciones.length === 0;
+    selectorArea.value = actual && opciones.includes(actual) ? actual : '';
+  }
+  function abrirEdicionActividad(idActividad) {
+    const actividad = DB.actividades.find(a =>
+      String(a.ID_ACTIVIDAD || '') === String(idActividad || '')
+    );
+    if (!actividad) {
+      notificar('No se encontró la actividad seleccionada.', true);
+      return;
+    }
+    const panel = document.getElementById('panelEditarActividad');
+    const form = document.getElementById('formEditarActividad');
+    if (!panel || !form) return;
+    form.reset();
+    asignarCampoFormulario(form, 'ID_ACTIVIDAD', actividad.ID_ACTIVIDAD);
+    asignarCampoFormulario(form, 'NOMBRE_ACTIVIDAD', actividad.NOMBRE_ACTIVIDAD);
+    establecerSelectConValor(form.elements.TIPO_ACTIVIDAD, actividad.TIPO_ACTIVIDAD);
+    asignarCampoFormulario(form, 'PROGRAMA', actividad.PROGRAMA);
+    establecerSelectConValor(
+      document.getElementById('editarEscuelaLinea'),
+      actividad.ESCUELA_LINEA
+    );
+    actualizarAreasEdicionActividad(actividad.AREA_TEMATICA);
+    asignarCampoFormulario(form, 'ANO', actividad.ANO);
+    asignarCampoFormulario(form, 'SESIONES_TOTALES', numeroPlano(actividad.SESIONES_TOTALES, 1));
+    establecerSelectConValor(form.elements.REGLA_RESULTADO, actividad.REGLA_RESULTADO || 'Asistencia');
+    asignarCampoFormulario(
+      form,
+      'PORCENTAJE_APROBACION',
+      porcentajeParaFormulario(actividad.PORCENTAJE_APROBACION)
+    );
+    establecerSelectConValor(
+      form.elements.REQUIERE_SELECCION,
+      actividad.REQUIERE_SELECCION || 'No'
+    );
+    asignarCampoFormulario(form, 'CUPOS', actividad.CUPOS);
+    asignarCampoFormulario(form, 'FECHA_INICIO', fechaInput(actividad.FECHA_INICIO));
+    asignarCampoFormulario(form, 'FECHA_TERMINO', fechaInput(actividad.FECHA_TERMINO));
+    establecerSelectConValor(form.elements.MODALIDAD, actividad.MODALIDAD || 'Presencial');
+    establecerSelectConValor(
+      form.elements.ESTADO_ACTIVIDAD,
+      actividad.ESTADO_ACTIVIDAD || 'Planificada'
+    );
+    asignarCampoFormulario(form, 'INSTITUCION_ASOCIADA', actividad.INSTITUCION_ASOCIADA);
+    asignarCampoFormulario(form, 'RESPONSABLE', actividad.RESPONSABLE);
+    asignarCampoFormulario(form, 'CARPETA_DRIVE', actividad.CARPETA_DRIVE);
+    asignarCampoFormulario(form, 'OBSERVACIONES', actividad.OBSERVACIONES);
+    panel.hidden = false;
+    panel.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  function cerrarEdicionActividad() {
+    const panel = document.getElementById('panelEditarActividad');
+    const form = document.getElementById('formEditarActividad');
+    if (form) form.reset();
+    if (panel) panel.hidden = true;
+  }
+  function solicitarQuitarActividad(idActividad) {
+    if (!idActividad) return;
+    mostrarCarga(true, 'Revisando vínculos de la actividad…');
+    google.script.run
+      .withSuccessHandler(impacto => {
+        mostrarCarga(false);
+        const accion = impacto.accion === 'eliminar' ? 'eliminará definitivamente' : 'archivará';
+        const detalle = `Participaciones asociadas: ${impacto.participaciones || 0}.\nFormularios vinculados: ${impacto.formularios || 0}.` +
+          (impacto.formulariosActivos ? `\nFormularios activos que se desactivarán: ${impacto.formulariosActivos}.` : '');
+        if (!confirm(`La actividad “${impacto.nombre || idActividad}” se ${accion}.\n\n${detalle}\n\n¿Desea continuar?`)) return;
+        ejecutarQuitarActividad_(idActividad);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .obtenerImpactoQuitarActividad(idActividad);
+  }
+  function ejecutarQuitarActividad_(idActividad) {
+    mostrarCarga(true, 'Quitando actividad…');
+    google.script.run
+      .withSuccessHandler(respuesta => {
+        mostrarCarga(false);
+        notificar(respuesta.mensaje);
+        cerrarEdicionActividad();
+        DB.actividades = [];
+        MODULOS_CARGADOS.delete('actividades');
+        asegurarModulo('actividades', () => cargarDatos(true));
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .quitarActividad({idActividad:idActividad, confirmar:true});
+  }
+  function asignarCampoFormulario(form, nombre, valor) {
+    const campo = form?.elements?.[nombre];
+    if (campo) campo.value = valor ?? '';
+  }
+  function establecerSelectConValor(selector, valor) {
+    if (!selector) return;
+    const texto = String(valor || '').trim();
+    const existe = [...selector.options].some(op => op.value === texto);
+    if (texto && !existe) {
+      selector.insertAdjacentHTML(
+        'beforeend',
+        `<option value="${esc(texto)}">${esc(texto)}</option>`
+      );
+    }
+    selector.value = texto;
+  }
+  function porcentajeParaFormulario(valor) {
+    const texto = String(valor ?? '').trim();
+    if (!texto) return '';
+    const limpio = texto.replace('%','').replace(',','.').trim();
+    const numero = Number(limpio);
+    if (!Number.isFinite(numero)) return '';
+    if (texto.includes('%')) return numero;
+    return numero <= 1 ? numero * 100 : numero;
+  }
+  function enviarEdicionActividad(evento) {
+    evento.preventDefault();
+    const form = evento.target;
+    const datos = Object.fromEntries(new FormData(form).entries());
+    const estado = String(datos.ESTADO_ACTIVIDAD || '');
+    const avisoFinal = ['Ejecutada', 'Cerrada'].includes(estado)
+      ? '\n\nAl continuar, se recalcularán los resultados de las personas seleccionadas.'
+      : '';
+    if (!confirm('¿Desea guardar los cambios de esta actividad?' + avisoFinal)) {
+      return;
+    }
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(respuesta => {
+        mostrarCarga(false);
+        notificar(respuesta.mensaje);
+        cerrarEdicionActividad();
+        cargarDatos();
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .actualizarActividad(datos);
+  }
+  function partesFechaPersona(valor) {
+    const texto = String(valor || '').trim();
+    if (!texto) return null;
+    let m = texto.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (m) {
+      return {
+        anio: Number(m[1]),
+        mes: Number(m[2]),
+        dia: Number(m[3])
+      };
+    }
+    m = texto.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+    if (m) {
+      return {
+        anio: Number(m[3]),
+        mes: Number(m[2]),
+        dia: Number(m[1])
+      };
+    }
+    return null;
+  }
+  function calcularEdadDesdeFecha(valor) {
+    const partes = partesFechaPersona(valor);
+    if (!partes) return '';
+    const nacimiento = new Date(partes.anio, partes.mes - 1, partes.dia);
+    if (
+      nacimiento.getFullYear() !== partes.anio ||
+      nacimiento.getMonth() !== partes.mes - 1 ||
+      nacimiento.getDate() !== partes.dia
+    ) return '';
+    const hoy = new Date();
+    if (nacimiento.getTime() > hoy.getTime()) return '';
+    let edad = hoy.getFullYear() - nacimiento.getFullYear();
+    const aunNoCumple =
+      hoy.getMonth() < nacimiento.getMonth() ||
+      (hoy.getMonth() === nacimiento.getMonth() &&
+       hoy.getDate() < nacimiento.getDate());
+    if (aunNoCumple) edad--;
+    return edad >= 0 && edad <= 120 ? edad : '';
+  }
+  function actualizarEdadPersona() {
+    const fecha = document.getElementById('fechaNacimientoPersona');
+    const edad = document.getElementById('edadPersona');
+    if (!edad) return;
+    const calculada = calcularEdadDesdeFecha(fecha?.value || '');
+    edad.value = calculada === '' ? '' : `${calculada} años`;
+  }
+  function fechaPersonaVisible(valor) {
+    const partes = partesFechaPersona(valor);
+    if (!partes) return valor ? String(valor) : 'No informada';
+    return `${String(partes.dia).padStart(2,'0')}-${String(partes.mes).padStart(2,'0')}-${partes.anio}`;
+  }
+  function edadVisible(valor) {
+    return valor === '' || valor === null || valor === undefined
+      ? 'No informada'
+      : `${valor} años`;
+  }
+  function configurarFechaNacimientoPersona() {
+    const hoy = new Date();
+    const maximo = [
+      hoy.getFullYear(),
+      String(hoy.getMonth() + 1).padStart(2,'0'),
+      String(hoy.getDate()).padStart(2,'0')
+    ].join('-');
+    ['fechaNacimientoPersona', 'editarFechaNacimientoPersona'].forEach(id => {
+      const campo = document.getElementById(id);
+      if (campo) campo.max = maximo;
+    });
+  }
+  function abrirEdicionPersona(idPersona) {
+    const persona = DB.personas.find(p => String(p.ID_PERSONA || '') === String(idPersona || ''));
+    if (!persona) return notificar('No se encontró la persona seleccionada.', true);
+    const panel = document.getElementById('panelEditarPersona');
+    const form = document.getElementById('formEditarPersona');
+    if (!panel || !form) return;
+    form.reset();
+    asignarCampoFormulario(form, 'ID_PERSONA', persona.ID_PERSONA);
+    establecerSelectConValor(form.elements.TIPO_DOCUMENTO, persona.TIPO_DOCUMENTO || (persona.RUT ? 'RUT' : 'Pasaporte'));
+    asignarCampoFormulario(form, 'NUMERO_DOCUMENTO', persona.NUMERO_DOCUMENTO || persona.RUT || '');
+    asignarCampoFormulario(form, 'NOMBRE_COMPLETO', persona.NOMBRE_COMPLETO);
+    asignarCampoFormulario(form, 'CORREO', persona.CORREO);
+    asignarCampoFormulario(form, 'TELEFONO', persona.TELEFONO);
+    asignarCampoFormulario(form, 'COMUNA', persona.COMUNA);
+    asignarCampoFormulario(form, 'BARRIO', persona.BARRIO);
+    asignarCampoFormulario(form, 'DIRECCION', persona.DIRECCION);
+    asignarCampoFormulario(form, 'FECHA_NACIMIENTO', fechaInput(persona.FECHA_NACIMIENTO));
+    asignarCampoFormulario(form, 'GENERO', persona.GENERO);
+    asignarCampoFormulario(form, 'NACIONALIDAD', persona.NACIONALIDAD);
+    establecerSelectConValor(form.elements.AUTORIZA_CONTACTO, persona.AUTORIZA_CONTACTO || 'No informado');
+    establecerSelectConValor(form.elements.PARTICIPA_PMJH, persona.PARTICIPA_PMJH || 'No informado');
+    asignarCampoFormulario(form, 'OBSERVACIONES', persona.OBSERVACIONES);
+    actualizarDocumentoEdicionPersona();
+    actualizarEdadEdicionPersona();
+    panel.hidden = false;
+    panel.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  function cerrarEdicionPersona() {
+    const panel = document.getElementById('panelEditarPersona');
+    const form = document.getElementById('formEditarPersona');
+    if (form) form.reset();
+    if (panel) panel.hidden = true;
+  }
+  function actualizarDocumentoEdicionPersona() {
+    const tipo = document.getElementById('editarTipoDocumentoPersona')?.value || 'RUT';
+    const nacionalidad = document.getElementById('editarNacionalidadPersona');
+    const numero = document.getElementById('editarNumeroDocumentoPersona');
+    if (nacionalidad) nacionalidad.required = tipo === 'Pasaporte';
+    if (numero) numero.placeholder = tipo === 'Pasaporte' ? 'Ej.: AB123456' : 'Ej.: 12345678-9';
+  }
+  function actualizarEdadEdicionPersona() {
+    const fecha = document.getElementById('editarFechaNacimientoPersona');
+    const edad = document.getElementById('editarEdadPersona');
+    if (!edad) return;
+    const calculada = calcularEdadDesdeFecha(fecha?.value || '');
+    edad.value = calculada === '' ? '' : `${calculada} años`;
+  }
+  function enviarEdicionPersona(evento) {
+    evento.preventDefault();
+    const form = evento.target;
+    const datos = Object.fromEntries(new FormData(form).entries());
+    if (!confirm('¿Desea guardar los cambios de esta persona?')) return;
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(respuesta => {
+        mostrarCarga(false);
+        notificar(respuesta.mensaje);
+        cerrarEdicionPersona();
+        cargarDatos();
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .actualizarPersona(datos);
+  }
+  function actualizarDocumentoPersona() {
+    const tipo = document.getElementById('tipoDocumentoPersona')?.value || 'RUT';
+    const nacionalidad = document.getElementById('nacionalidadPersona');
+    const numero = document.getElementById('numeroDocumentoPersona');
+    if (nacionalidad) nacionalidad.required = tipo === 'Pasaporte';
+    if (numero) numero.placeholder = tipo === 'Pasaporte' ? 'Ej.: AB123456' : 'Ej.: 12345678-9';
+  }
+  actualizarDocumentoPersona();
+  configurarFechaNacimientoPersona();
+  actualizarEdadPersona();
+  actualizarAreasActividad();
+  actualizarAreasPersonaInteres();
+  actualizarFiltroAreasDemanda();
+  actualizarAreasComunicacion();
+  actualizarControlesComunicacion();
+  document.getElementById('formPersona').addEventListener('submit', e => enviarFormulario(e, 'guardarPersona'));
+  document.getElementById('formActividad').addEventListener('submit', e => enviarFormulario(e, 'guardarActividad'));
+  document.getElementById('formParticipacion').addEventListener('submit', e => enviarFormulario(e, 'guardarParticipacion'));
+  document.getElementById('formEditarActividad').addEventListener('submit', enviarEdicionActividad);
+  document.getElementById('formEditarPersona').addEventListener('submit', enviarEdicionPersona);
+  function enviarFormulario(evento, funcion) {
+    evento.preventDefault();
+    const form = evento.target;
+    const datos = Object.fromEntries(new FormData(form).entries());
+    if (form.id === 'formPersona') datos.INTERESES = NUEVOS_INTERESES.map(x => ({...x}));
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(r => {
+        mostrarCarga(false);
+        notificar(r.mensaje);
+        form.reset();
+        if (form.id === 'formPersona') {
+          NUEVOS_INTERESES = [];
+          renderInteresesNuevaPersona();
+          actualizarDocumentoPersona();
+          actualizarEdadPersona();
+          actualizarAreasPersonaInteres();
+        }
+        if (form.id === 'formActividad') actualizarAreasActividad();
+        cargarDatos();
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })[funcion](datos);
+  }
+  function cargarGestionActividad() {
+    const idActividad = document.getElementById('gestionActividad').value;
+    if (!idActividad) {
+      notificar('Debe seleccionar una actividad.', true);
+      return;
+    }
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(datos => {
+        GESTION = datos;
+        GESTION_SELECCIONADOS.clear();
+        GESTION_MODIFICADOS.clear();
+        actualizarKpisGestion();
+        renderGestion();
+        mostrarCarga(false);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .obtenerGestionActividad(idActividad);
+  }
+  function actualizarKpisGestion() {
+    const r = GESTION.resumen || {};
+    texto('gInscritos', r.inscritos || 0);
+    texto('gSeleccionados', r.seleccionados || 0);
+    texto('gConfirmados', r.confirmados || 0);
+    texto('gAsistentes', r.asistentes || 0);
+    texto('gAprobados', r.aprobados || 0);
+  }
+  function renderGestion(sincronizarAntes = true) {
+    if (sincronizarAntes) {
+      sincronizarGestionDesdeTabla();
+    }
+    const tbody = document.getElementById('tablaGestion');
+    const q = normalizar(document.getElementById('buscarGestion')?.value || '');
+    const filtro = document.getElementById('filtroGestionSeleccion')?.value || '';
+    const filas = (GESTION.participaciones || []).filter(p =>
+      normalizar([p.NOMBRE_COMPLETO,p.RUT,p.DOCUMENTO,p.EDAD,p.CORREO,p.PARTICIPA_PMJH].join(' ')).includes(q) &&
+      (!filtro || p.ESTADO_SELECCION === filtro)
+    );
+    if (!filas.length) {
+      tbody.innerHTML = `<tr><td colspan="13" class="empty-state">${
+        GESTION.actividad ? 'No hay participantes que coincidan con el filtro.' : 'Seleccione una actividad para comenzar.'
+      }</td></tr>`;
+      actualizarCheckPrincipalGestion();
+      return;
+    }
+    tbody.innerHTML = filas.map(p => {
+      const idx = GESTION.participaciones.indexOf(p);
+      const id = String(p.ID_PARTICIPACION || '');
+      const marcado = GESTION_SELECCIONADOS.has(id) ? 'checked' : '';
+      return `<tr data-idx="${idx}" data-id="${esc(id)}">
+        <td><input type="checkbox" class="gestion-check" data-id="${esc(id)}" ${marcado} onchange="cambiarSeleccionGestion(this)"></td>
+        <td class="nombre"><strong>${esc(p.NOMBRE_COMPLETO)}</strong><br><small>${esc(p.CORREO || '')}</small></td>
+        <td>${esc(p.DOCUMENTO || p.RUT)}</td>
+        <td>${esc(edadVisible(p.EDAD))}</td>
+        <td><span class="badge">${esc(p.PARTICIPA_PMJH || 'No informado')}</span></td>
+        <td>${selectGestion('CUMPLE_REQUISITOS', p.CUMPLE_REQUISITOS, ['Pendiente','Sí','No','No informado'])}</td>
+        <td>${selectGestion('ESTADO_SELECCION', p.ESTADO_SELECCION, ['Pendiente','Seleccionado','Lista de espera','No seleccionado','No informado'])}</td>
+        <td>${selectGestion('CONFIRMA_PARTICIPACION', p.CONFIRMA_PARTICIPACION, ['No informado','Sí','No'])}</td>
+        <td><input data-campo="SESIONES_ASISTIDAS" type="number" min="0" value="${esc(numeroPlano(p.SESIONES_ASISTIDAS,0))}" onchange="registrarCambioGestion(this)"></td>
+        <td><input data-campo="SESIONES_TOTALES" type="number" min="1" value="${esc(numeroPlano(p.SESIONES_TOTALES, GESTION.actividad?.SESIONES_TOTALES || 1))}" onchange="registrarCambioGestion(this)"></td>
+        <td><span class="badge">${esc(p.RESULTADO_FINAL || 'Pendiente')}</span></td>
+        <td>${selectGestion('CERTIFICADO', p.CERTIFICADO, ['No informado','Sí','No','No aplica'])}</td>
+        <td><input class="obs" data-campo="OBSERVACIONES" value="${esc(p.OBSERVACIONES || '')}" onchange="registrarCambioGestion(this)"></td>
+      </tr>`;
+    }).join('');
+    actualizarCheckPrincipalGestion();
+  }
+  function selectGestion(campo, actual, opciones) {
+    return `<select data-campo="${campo}" onchange="registrarCambioGestion(this)">` + opciones.map(op =>
+      `<option value="${esc(op)}" ${String(actual || '') === String(op) ? 'selected' : ''}>${esc(op || 'Automático')}</option>`
+    ).join('') + `</select>`;
+  }
+  function cambiarSeleccionGestion(checkbox) {
+    const id = String(checkbox.dataset.id || '').trim();
+    if (!id) return;
+    if (checkbox.checked) {
+      GESTION_SELECCIONADOS.add(id);
+    } else {
+      GESTION_SELECCIONADOS.delete(id);
+    }
+    actualizarCheckPrincipalGestion();
+  }
+  function actualizarCheckPrincipalGestion() {
+    const principal = document.getElementById('checkTodosGestion');
+    if (!principal) return;
+    const checksVisibles = [
+      ...document.querySelectorAll('#tablaGestion .gestion-check')
+    ];
+    if (!checksVisibles.length) {
+      principal.checked = false;
+      principal.indeterminate = false;
+      return;
+    }
+    const cantidadMarcados = checksVisibles.filter(function(check) {
+      return check.checked;
+    }).length;
+    principal.checked = cantidadMarcados === checksVisibles.length;
+    principal.indeterminate =
+      cantidadMarcados > 0 &&
+      cantidadMarcados < checksVisibles.length;
+  }
+  function registrarCambioGestion(control) {
+    const tr = control.closest('tr[data-idx]');
+    if (!tr) return;
+    const idx = Number(tr.dataset.idx);
+    const registro = GESTION.participaciones[idx];
+    if (!registro) return;
+    const campo = control.dataset.campo;
+    registro[campo] = control.value;
+    if (campo === 'ESTADO_SELECCION' &&
+        control.value !== 'Seleccionado') {
+      registro.SESIONES_ASISTIDAS = 0;
+      const asistencia = tr.querySelector(
+        '[data-campo="SESIONES_ASISTIDAS"]'
+      );
+      if (asistencia) asistencia.value = 0;
+    }
+    GESTION_MODIFICADOS.add(String(registro.ID_PARTICIPACION));
+  }
+  function sincronizarGestionDesdeTabla() {
+    document.querySelectorAll('#tablaGestion tr[data-idx]').forEach(tr => {
+      const idx = Number(tr.dataset.idx);
+      const registro = GESTION.participaciones[idx];
+      if (!registro) return;
+      tr.querySelectorAll('[data-campo]').forEach(control => {
+        registro[control.dataset.campo] = control.value;
+      });
+      const check = tr.querySelector('.gestion-check');
+      if (check) cambiarSeleccionGestion(check);
+    });
+  }
+  function indicesGestionMarcados() {
+    sincronizarGestionDesdeTabla();
+    return (GESTION.participaciones || [])
+      .map((p, i) => GESTION_SELECCIONADOS.has(String(p.ID_PARTICIPACION)) ? i : -1)
+      .filter(i => i >= 0);
+  }
+  function alternarTodosGestion(checkPrincipal) {
+    marcarTodosGestion(checkPrincipal.checked);
+  }
+  function marcarTodosGestion(estado) {
+    const checksVisibles = [
+      ...document.querySelectorAll('#tablaGestion .gestion-check')
+    ];
+    checksVisibles.forEach(function(check) {
+      const id = String(check.dataset.id || '').trim();
+      if (!id) return;
+      check.checked = estado;
+      if (estado) {
+        GESTION_SELECCIONADOS.add(id);
+      } else {
+        GESTION_SELECCIONADOS.delete(id);
+      }
+    });
+    actualizarCheckPrincipalGestion();
+  }
+  function aplicarMasivo(campo, idSelector) {
+    const valor = document.getElementById(idSelector).value;
+    if (!valor) return notificar('Seleccione un valor para aplicar.', true);
+    const indices = indicesGestionMarcados();
+    if (!indices.length) return notificar('Marque al menos una persona.', true);
+    indices.forEach(i => {
+      const p = GESTION.participaciones[i];
+      p[campo] = valor;
+      if (campo === 'ESTADO_SELECCION' &&
+          valor !== 'Seleccionado') {
+        p.SESIONES_ASISTIDAS = 0;
+      }
+      GESTION_MODIFICADOS.add(String(p.ID_PARTICIPACION));
+    });
+    renderGestion(false);
+    notificar('Cambio aplicado a ' + indices.length + ' registros.');
+  }
+  function marcarAsistenciaCompleta() {
+    const indices = indicesGestionMarcados();
+    if (!indices.length) return notificar('Marque al menos una persona.', true);
+    const seleccionados = indices.filter(i => GESTION.participaciones[i].ESTADO_SELECCION === 'Seleccionado');
+    if (!seleccionados.length) return notificar('La asistencia solo puede aplicarse a personas seleccionadas.', true);
+    seleccionados.forEach(i => {
+      const p = GESTION.participaciones[i];
+      p.SESIONES_ASISTIDAS = numeroPlano(p.SESIONES_TOTALES, GESTION.actividad?.SESIONES_TOTALES || 1);
+      GESTION_MODIFICADOS.add(String(p.ID_PARTICIPACION));
+    });
+    renderGestion(false);
+  }
+  function marcarAsistenciaCero() {
+    const indices = indicesGestionMarcados();
+    if (!indices.length) {
+      return notificar('Marque al menos una persona.', true);
+    }
+    indices.forEach(i => {
+      const p = GESTION.participaciones[i];
+      p.SESIONES_ASISTIDAS = 0;
+      GESTION_MODIFICADOS.add(String(p.ID_PARTICIPACION));
+    });
+    renderGestion(false);
+    notificar(
+      'Asistencia establecida en 0 para ' +
+      indices.length +
+      ' registros.'
+    );
+  }
+  function guardarGestion() {
+    if (!GESTION.actividad) return notificar('Primero cargue una actividad.', true);
+    sincronizarGestionDesdeTabla();
+    const registros = GESTION.participaciones
+      .filter(p => GESTION_MODIFICADOS.has(String(p.ID_PARTICIPACION)))
+      .map(p => ({
+        ID_PARTICIPACION: p.ID_PARTICIPACION,
+        CUMPLE_REQUISITOS: p.CUMPLE_REQUISITOS,
+        ESTADO_SELECCION: p.ESTADO_SELECCION,
+        CONFIRMA_PARTICIPACION: p.CONFIRMA_PARTICIPACION,
+        SESIONES_ASISTIDAS: p.SESIONES_ASISTIDAS,
+        SESIONES_TOTALES: p.SESIONES_TOTALES,
+        CERTIFICADO: p.CERTIFICADO,
+        OBSERVACIONES: p.OBSERVACIONES
+      }));
+    if (!registros.length) {
+      return notificar('No hay cambios pendientes para guardar.', true);
+    }
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(r => {
+        mostrarCarga(false);
+        notificar(r.mensaje);
+        cargarGestionActividad();
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .guardarGestionMasiva({
+        idActividad: GESTION.actividad.ID_ACTIVIDAD,
+        registros
+      });
+  }
+  function cargarFormularios(forzar=false) {
+    mostrarCarga(true, forzar ? 'Actualizando formularios…' : 'Cargando formularios…');
+    google.script.run
+      .withSuccessHandler(datos => {
+        mostrarCarga(false);
+        FORMULARIOS = Array.isArray(datos?.formularios) ? datos.formularios : [];
+        CAPACIDAD_FORMULARIOS = datos?.capacidad || {};
+        FORMULARIO_INTERESES = datos?.formularioIntereses || null;
+        texto('estadoActualizacionFormularios',
+          `${datos?.desdeCache ? 'Resumen rápido' : 'Conteos actualizados'}${datos?.fechaActualizacion ? ': ' + datos.fechaActualizacion : ''}`);
+        renderFormularios();
+        renderFormularioIntereses();
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .obtenerPanelFormularios(forzar === true);
+  }
+  function renderFormularios() {
+    const activos = FORMULARIOS.filter(f => normalizar(f.estado) === 'activo').length;
+    const procesadas = FORMULARIOS.reduce((s,f) => s + Number(f.resumen?.procesadas || 0) + Number(f.resumen?.duplicadas || 0), 0);
+    const advertencias = FORMULARIOS.reduce((s,f) => s + Number(f.resumen?.advertencias || 0), 0);
+    const revisiones = FORMULARIOS.reduce((s,f) => s + Number(f.resumen?.revision || 0), 0);
+    texto('fActivos', activos);
+    texto('fArchivosActivos', CAPACIDAD_FORMULARIOS.archivosRespuestaActivos || 0);
+    texto('fTriggers', `${CAPACIDAD_FORMULARIOS.activadoresUtilizados || 0} / ${CAPACIDAD_FORMULARIOS.limiteTecnico || 20}`);
+    texto('fDisponibles', CAPACIDAD_FORMULARIOS.activadoresDisponibles ?? 20);
+    texto('fFormsPorTrigger', Number(CAPACIDAD_FORMULARIOS.formulariosPorActivador || 0).toFixed(1));
+    texto('fProcesadas', procesadas);
+    texto('fAdvertencias', advertencias);
+    texto('fRevision', revisiones);
+    const alerta = document.getElementById('alertaCapacidadFormularios');
+    if (alerta) { alerta.hidden = !CAPACIDAD_FORMULARIOS.alerta; alerta.textContent = CAPACIDAD_FORMULARIOS.alerta || ''; }
+    const tbody = document.getElementById('tablaFormularios');
+    if (!tbody) return;
+    if (!FORMULARIOS.length) {
+      tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Todavía no hay formularios vinculados.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = FORMULARIOS.map(f => {
+      const r = f.resumen || {};
+      const detalles = (r.detallesRevision || []).map(x => `Fila ${esc(x.fila || '—')}: ${esc(x.detalle)}`);
+      if (Number(r.pendientes || 0)) detalles.unshift(`${esc(r.pendientes)} respuesta(s) pendiente(s) de recuperar.`);
+      const detalle = detalles.join('<br>') || '—';
+      const activo = normalizar(f.estado) === 'activo';
+      const automatizacion = f.activador || {estado: activo ? 'Sin diagnóstico' : 'No requerido', operativo: !activo};
+      return `<tr>
+        <td><strong>${esc(f.actividad)}</strong><br><span class="muted">${esc(f.idActividad)}</span></td>
+        <td>${esc(f.archivo)}<br><span class="muted">${esc(f.hoja)}</span></td>
+        <td><span class="badge">${esc(f.estado)}</span></td>
+        <td><span class="badge">${esc(automatizacion.estado)}</span></td>
+        <td>${esc(r.total || 0)}</td>
+        <td>${esc((r.procesadas || 0) + (r.duplicadas || 0))}</td>
+        <td>${esc(r.advertencias || 0)}</td>
+        <td>${esc(r.revision || 0)}</td>
+        <td>${detalle}</td>
+        <td>
+          <button class="btn secondary compact" type="button" data-id="${esc(f.idConfig)}" onclick="cargarCasosRevision(this.dataset.id)" ${(r.revision || 0) ? '' : 'disabled'}>Ver casos (${esc(r.revision || 0)})</button>
+          <button class="btn secondary compact" type="button" data-id="${esc(f.idConfig)}" onclick="repararYRecuperarFormularioWeb(this.dataset.id)" ${activo ? '' : 'disabled'}>Reparar y recuperar</button>
+          <button class="btn secondary compact" type="button" data-id="${esc(f.idConfig)}" data-activo="${activo ? '0' : '1'}" onclick="cambiarEstadoFormularioWeb(this.dataset.id,this.dataset.activo)">${activo ? 'Desactivar' : 'Activar'}</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+  function renderFormularioIntereses() {
+    const estado = document.getElementById('estadoFormularioIntereses');
+    const crear = document.getElementById('btnCrearFormularioIntereses');
+    const copiar = document.getElementById('btnCopiarFormularioIntereses');
+    const abrir = document.getElementById('linkAbrirFormularioIntereses');
+    const editar = document.getElementById('linkEditarFormularioIntereses');
+    const respuestas = document.getElementById('linkRespuestasFormularioIntereses');
+    if (!estado || !crear) return;
+    const existe = Boolean(FORMULARIO_INTERESES?.formId && FORMULARIO_INTERESES?.urlPublica);
+    const operativo = existe && normalizar(FORMULARIO_INTERESES.estado) === 'activo' &&
+      FORMULARIO_INTERESES.activador?.operativo !== false;
+    estado.textContent = operativo
+      ? `Formulario operativo · ${FORMULARIO_INTERESES.resumen?.total || 0} respuesta(s) recibida(s).`
+      : (existe
+        ? 'El formulario existe, pero su vinculación o automatización no está activa. Use Reparar y recuperar o Activar en la tabla inferior.'
+        : 'Aún no se ha creado el formulario institucional. Esta operación se realiza una sola vez.');
+    crear.textContent = existe ? 'Verificar formulario y automatización' : 'Crear formulario institucional';
+    [copiar, abrir, editar, respuestas].forEach(elemento => { if (elemento) elemento.hidden = !existe; });
+    if (!existe) return;
+    abrir.href = FORMULARIO_INTERESES.urlPublica;
+    editar.href = FORMULARIO_INTERESES.urlEdicion;
+    respuestas.href = FORMULARIO_INTERESES.urlRespuestas;
+  }
+  function crearFormularioInteresesWeb() {
+    const mensaje = FORMULARIO_INTERESES
+      ? 'Se verificará el formulario existente y su automatización.'
+      : 'Se creará el Google Form institucional, su archivo de respuestas y la automatización. ¿Desea continuar?';
+    if (!confirm(mensaje)) return;
+    mostrarCarga(true, FORMULARIO_INTERESES ? 'Verificando formulario…' : 'Creando formulario institucional…');
+    google.script.run
+      .withSuccessHandler(resultado => {
+        mostrarCarga(false);
+        notificar(resultado.mensaje || 'Formulario disponible.');
+        cargarFormularios(true);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .crearFormularioRegistroInteresesDesdeWeb();
+  }
+  async function copiarEnlaceFormularioIntereses() {
+    const enlace = FORMULARIO_INTERESES?.urlPublica || '';
+    if (!enlace) return notificar('El formulario aún no está disponible.', true);
+    try {
+      await navigator.clipboard.writeText(enlace);
+      notificar('Enlace público copiado.');
+    } catch (error) {
+      window.prompt('Copie el enlace público:', enlace);
+    }
+  }
+  function vincularFormularioWeb() {
+    const idActividad = document.getElementById('formularioActividad')?.value || '';
+    const url = document.getElementById('formularioUrl')?.value.trim() || '';
+    if (!idActividad || !url) {
+      notificar('Seleccione una actividad y pegue la URL de la hoja de respuestas.', true);
+      return;
+    }
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(r => {
+        mostrarCarga(false);
+        document.getElementById('formularioUrl').value = '';
+        notificar(r.mensaje || 'Formulario vinculado.');
+        cargarFormularios(true);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .vincularFormularioDesdeWeb({idActividad, url});
+  }
+  function cambiarEstadoFormularioWeb(idConfig, activar) {
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(r => {
+        mostrarCarga(false);
+        notificar(r.mensaje);
+        cargarFormularios(true);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .cambiarEstadoFormularioVinculado(idConfig, activar === '1');
+  }
+  function reprocesarFormulario(idConfig) {
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(r => {
+        mostrarCarga(false);
+        notificar(r.mensaje);
+        cargarFormularios(true);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .reprocesarRevisionesFormulario(idConfig);
+  }
+  function repararYRecuperarFormularioWeb(idConfig) {
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(r => {
+        mostrarCarga(false);
+        notificar(r.mensaje || 'Automatización reparada y respuestas pendientes revisadas.');
+        cargarFormularios(true);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .repararYRecuperarFormulario(idConfig);
+  }
+  function cargarCasosRevision(idConfig) {
+    CONFIG_REVISION_ACTIVA = String(idConfig || '');
+    CASO_REVISION_ACTIVO = null;
+    cerrarEditorCasoRevision();
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(datos => {
+        mostrarCarga(false);
+        CASOS_REVISION = Array.isArray(datos) ? datos : [];
+        const formulario = FORMULARIOS.find(f => String(f.idConfig) === CONFIG_REVISION_ACTIVA) || {};
+        texto('casosRevisionContexto', `${formulario.actividad || 'Actividad'} · ${CASOS_REVISION.length} caso(s) pendiente(s)`);
+        renderCasosRevision();
+        const panel = document.getElementById('panelCasosRevision');
+        panel.hidden = false;
+        panel.scrollIntoView({behavior:'smooth', block:'start'});
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .obtenerCasosRevisionFormulario(idConfig);
+  }
+  function renderCasosRevision() {
+    const tbody = document.getElementById('tablaCasosRevision');
+    if (!tbody) return;
+    if (!CASOS_REVISION.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No quedan respuestas pendientes de revisión.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = CASOS_REVISION.map((caso, indice) => `<tr>
+      <td>${esc(caso.fila)}</td>
+      <td>${esc(caso.fecha || '—')}</td>
+      <td><strong>${esc(caso.nombre || 'Sin nombre')}</strong></td>
+      <td>${esc(caso.documento || '—')}</td>
+      <td>${esc(caso.correo || '—')}<br><span class="muted">${esc(caso.telefono || '—')}</span></td>
+      <td class="review-error">${esc(caso.detalle || 'Requiere revisión.')}</td>
+      <td><button class="btn compact" type="button" data-indice="${indice}" onclick="abrirCasoRevision(Number(this.dataset.indice))">Corregir</button></td>
+    </tr>`).join('');
+  }
+  function abrirCasoRevision(indice) {
+    const caso = CASOS_REVISION[indice];
+    if (!caso) return notificar('No se encontró el caso seleccionado.', true);
+    CASO_REVISION_ACTIVO = caso;
+    texto('editorCasoContexto', `Fila ${caso.fila} · ${caso.nombre || 'Sin nombre'}`);
+    const camposCaso = caso.campos || [];
+    const campoNombres = camposCaso.find(campo => ['nombre', 'nombres'].includes(normalizar(campo.encabezado)));
+    const campoApellidos = camposCaso.find(campo => normalizar(campo.encabezado) === 'apellidos');
+    const avisoNombre = campoNombres && campoApellidos && !String(campoApellidos.valor || '').trim()
+      ? ' Complete Nombres y Apellidos por separado antes de reprocesar; el sistema no adivinará cómo dividirlos.'
+      : '';
+    texto('editorCasoError', (caso.detalle || 'Requiere revisión.') + avisoNombre);
+    const contenedor = document.getElementById('camposCasoRevision');
+    contenedor.innerHTML = camposCaso.map((campo, i) => {
+      const clave = normalizar(campo.encabezado);
+      const tipo = clave.includes('correo') || clave.includes('email') ? 'email'
+        : clave.includes('telefono') || clave.includes('celular') ? 'tel' : 'text';
+      return `<div class="field">
+        <label>${esc(campo.encabezado)}</label>
+        <input type="${tipo}" data-campo-indice="${i}" value="${esc(campo.valor)}">
+      </div>`;
+    }).join('');
+    const editor = document.getElementById('editorCasoRevision');
+    editor.hidden = false;
+    editor.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  function guardarCorreccionCasoRevision() {
+    const caso = CASO_REVISION_ACTIVO;
+    if (!caso) return notificar('Abra primero un caso para corregir.', true);
+    const entradas = Array.from(document.querySelectorAll('#camposCasoRevision [data-campo-indice]'));
+    const cambios = entradas.map(input => {
+      const campo = caso.campos[Number(input.dataset.campoIndice)] || {};
+      return {encabezado: campo.encabezado || '', valor: input.value};
+    });
+    mostrarCarga(true);
+    google.script.run
+      .withSuccessHandler(r => {
+        mostrarCarga(false);
+        notificar(r.mensaje || 'Respuesta reprocesada.', !r.resuelto);
+        cerrarEditorCasoRevision();
+        cargarFormularios(true);
+        cargarCasosRevision(CONFIG_REVISION_ACTIVA);
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .corregirYReprocesarCasoFormulario({
+        idConfig: caso.idConfig,
+        fila: caso.fila,
+        cambios
+      });
+  }
+  function cerrarEditorCasoRevision() {
+    CASO_REVISION_ACTIVO = null;
+    const editor = document.getElementById('editorCasoRevision');
+    if (editor) editor.hidden = true;
+    const campos = document.getElementById('camposCasoRevision');
+    if (campos) campos.innerHTML = '';
+  }
+  function cerrarCasosRevision() {
+    cerrarEditorCasoRevision();
+    CASOS_REVISION = [];
+    CONFIG_REVISION_ACTIVA = '';
+    const panel = document.getElementById('panelCasosRevision');
+    if (panel) panel.hidden = true;
+  }
+  function fechaInput(valor) {
+    const s = String(valor || '').trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
+    return m ? `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}` : '';
+  }
+  function numeroPlano(valor, defecto=0) {
+    const n = Number(String(valor ?? '').replace(',','.'));
+    return Number.isFinite(n) ? n : defecto;
+  }
+  function mostrarCarga(estado, mensaje='Procesando…') {
+    CARGAS_ACTIVAS = Math.max(0, CARGAS_ACTIVAS + (estado ? 1 : -1));
+    const panel = document.getElementById('loading');
+    const etiqueta = document.getElementById('loadingTexto');
+    if (estado && etiqueta) etiqueta.textContent = mensaje;
+    panel.classList.toggle('show', CARGAS_ACTIVAS > 0);
+  }
+  function texto(id, valor) { document.getElementById(id).textContent = valor ?? ''; }
+  function formatoPorcentaje(v) { return new Intl.NumberFormat('es-CL',{style:'percent',maximumFractionDigits:1}).format(v || 0); }
+  function normalizar(v) { return String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
+  function esc(v) { return String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+  function notificar(mensaje, error=false) {
+    const t = document.getElementById('toast');
+    t.textContent = mensaje; t.className = 'toast' + (error ? ' error' : '');
+    t.style.display = 'block'; setTimeout(() => t.style.display='none', 4200);
+  }
+  function cargarReporte() {
+    mostrarCarga(true, 'Generando reporte…');
+    texto('estadoReporte', 'Calculando indicadores y gráficos…');
+    const filtros = {ano:document.getElementById('repAno')?.value || '', escuelaLinea:document.getElementById('repEscuela')?.value || '',
+      areaTematica:document.getElementById('repArea')?.value || '', institucion:document.getElementById('repInstitucion')?.value.trim() || '',
+      modalidad:document.getElementById('repModalidad')?.value || '', estado:document.getElementById('repEstado')?.value || ''};
+    google.script.run.withSuccessHandler(datos => {
+      REPORTE = datos;
+      renderReporte();
+      texto('estadoReporte', `Reporte actualizado: ${datos?.fechaActualizacion || 'ahora'}`);
+      mostrarCarga(false);
+    }).withFailureHandler(error => {
+      mostrarCarga(false);
+      texto('estadoReporte', 'No fue posible generar el reporte.');
+      notificar(error.message || String(error), true);
+    }).obtenerReporteEstadistico(filtros);
+  }
+  function renderReporte() {
+    const i = REPORTE?.indicadores || {};
+    texto('repActividades', i.actividades || 0); texto('repPersonas', i.personasUnicas || 0); texto('repInscripciones', i.inscripciones || 0);
+    texto('repSeleccionadas', i.seleccionadas || 0); texto('repAsistentes', i.asistentes || 0); texto('repTasaAsistencia', formatoPorcentaje(i.asistencia || 0));
+    texto('repTasaSeleccion', formatoPorcentaje(i.seleccion || 0)); texto('repTasaInasistencia', formatoPorcentaje(i.inasistencia || 0));
+    texto('repTasaAprobacion', formatoPorcentaje(i.aprobacion || 0)); texto('repTasaCertificacion', formatoPorcentaje(i.certificacion || 0));
+    texto('repBrechaDemanda', i.brechaDemanda || 0); texto('repEdadPromedio', REPORTE?.demografia?.edadPromedio == null ? '—' : `${Number(REPORTE.demografia.edadPromedio).toFixed(1)} años`);
+    crearGrafico('chartRepTematica','bar',(REPORTE?.porTematica || []).slice(0,10),true);
+    crearGrafico('chartRepInstitucion','bar',(REPORTE?.porInstitucion || []).slice(0,10),true);
+    crearGrafico('chartRepModalidad','doughnut',REPORTE?.porModalidad || []);
+    crearGrafico('chartRepGenero','doughnut',REPORTE?.porGenero || []);
+    crearGrafico('chartRepEdad','bar',REPORTE?.porTramoEdad || [],true);
+    crearGrafico('chartRepComuna','bar',(REPORTE?.porComuna || []).slice(0,10),true);
+    const filas = REPORTE?.actividades || [];
+    document.getElementById('tablaReportes').innerHTML = filas.length ? filas.map(a => `<tr><td><strong>${esc(a.NOMBRE_ACTIVIDAD)}</strong></td><td>${esc(a.ANO)}</td><td>${esc(a.ESCUELA_LINEA)}</td><td>${esc(a.AREA_TEMATICA)}</td><td>${esc(a.INSTITUCION_ASOCIADA)}</td><td>${esc(a.MODALIDAD)}</td><td>${esc(a.ESTADO_ACTIVIDAD)}</td><td>${esc(a.CUPOS)}</td><td>${esc(a.INSCRIPCIONES)}</td><td>${esc(a.SELECCIONADAS)}</td><td>${esc(a.ASISTENTES)}</td></tr>`).join('') : '<tr><td colspan="11" class="empty-state">No hay actividades para los filtros seleccionados.</td></tr>';
+  }
+  function cargarReporteAsistencias() {
+    const selectorActividad = document.getElementById('gestionActividad');
+    const idActividad = selectorActividad?.value || '';
+    if (!idActividad) {
+      notificar('Seleccione una actividad en Gestión de participantes.', true);
+      selectorActividad?.focus();
+      return;
+    }
+    mostrarCarga(true, 'Generando listado de asistencias…');
+    texto('estadoReporteAsistencias', 'Consultando personas, capacitaciones y asistencias…');
+    const filtros = {
+      idActividad,
+      tipoAsistencia: document.getElementById('asisTipo')?.value || 'todos',
+      resultado: document.getElementById('asisResultado')?.value || ''
+    };
+    google.script.run.withSuccessHandler(datos => {
+      REPORTE_ASISTENCIAS = datos || {resumen:{}, filas:[]};
+      PAGINA_ASISTENCIAS = 1;
+      renderReporteAsistencias();
+      texto('estadoReporteAsistencias', `Listado actualizado: ${datos?.fechaActualizacion || 'ahora'}. Los datos personales son de uso institucional.`);
+      mostrarCarga(false);
+    }).withFailureHandler(error => {
+      mostrarCarga(false);
+      texto('estadoReporteAsistencias', 'No fue posible generar el listado de asistencias.');
+      notificar(error.message || String(error), true);
+    }).obtenerReporteAsistencias(filtros);
+  }
+  function actualizarActividadAsistenciaSeleccionada() {
+    const selector = document.getElementById('gestionActividad');
+    const opcion = selector?.selectedOptions?.[0];
+    const etiqueta = selector?.value ? opcion?.textContent || selector.value : 'Ninguna. Seleccione una actividad en la parte superior.';
+    texto('asisActividadSeleccionada', etiqueta);
+    REPORTE_ASISTENCIAS = null;
+    PAGINA_ASISTENCIAS = 1;
+    ['asisRegistros','asisPersonas','asisActividades','asisCertificados'].forEach(id => texto(id, 0));
+    texto('asisPromedio', '0%');
+    texto('paginaAsistenciasInfo', '');
+    const tabla = document.getElementById('tablaReporteAsistencias');
+    if (tabla) tabla.innerHTML = '<tr><td colspan="17" class="empty-state">Seleccione una actividad y genere la nómina.</td></tr>';
+  }
+  function filasReporteAsistenciasFiltradas_() {
+    const q = normalizar(document.getElementById('buscarAsistencias')?.value || '');
+    const filas = REPORTE_ASISTENCIAS?.filas || [];
+    if (!q) return filas;
+    return filas.filter(f => normalizar([
+      f.NOMBRE_COMPLETO, f.DOCUMENTO, f.CORREO, f.TELEFONO,
+      f.NOMBRE_ACTIVIDAD, f.ESCUELA_LINEA, f.AREA_TEMATICA,
+      f.INSTITUCION_ASOCIADA, f.RESULTADO_FINAL
+    ].join(' ')).includes(q));
+  }
+  function renderReporteAsistencias() {
+    const resumen = REPORTE_ASISTENCIAS?.resumen || {};
+    texto('asisRegistros', resumen.registros || 0);
+    texto('asisPersonas', resumen.personasUnicas || 0);
+    texto('asisActividades', resumen.actividades || 0);
+    texto('asisPromedio', formatoPorcentaje(resumen.asistenciaPromedio || 0));
+    texto('asisCertificados', resumen.certificados || 0);
+    const filas = filasReporteAsistenciasFiltradas_();
+    const paginas = Math.max(1, Math.ceil(filas.length / TAMANO_PAGINA_ASISTENCIAS));
+    PAGINA_ASISTENCIAS = Math.min(Math.max(1, PAGINA_ASISTENCIAS), paginas);
+    const inicio = (PAGINA_ASISTENCIAS - 1) * TAMANO_PAGINA_ASISTENCIAS;
+    const visibles = filas.slice(inicio, inicio + TAMANO_PAGINA_ASISTENCIAS);
+    texto('paginaAsistenciasInfo', `${filas.length ? inicio + 1 : 0}–${Math.min(inicio + TAMANO_PAGINA_ASISTENCIAS, filas.length)} de ${filas.length}`);
+    document.getElementById('tablaReporteAsistencias').innerHTML = visibles.length ? visibles.map(f => `<tr>
+      <td><strong>${esc(f.NOMBRE_COMPLETO)}</strong></td><td>${esc(f.DOCUMENTO)}</td><td>${esc(f.CORREO)}</td><td>${esc(f.TELEFONO)}</td>
+      <td>${esc(f.COMUNA)}</td><td><span class="badge">${esc(f.PARTICIPA_PMJH)}</span></td><td><strong>${esc(f.NOMBRE_ACTIVIDAD)}</strong><br><span class="muted">${esc(f.ID_ACTIVIDAD)}</span></td>
+      <td>${esc(f.ANO)}</td><td>${esc(f.ESCUELA_LINEA)}<br><span class="muted">${esc(f.AREA_TEMATICA)}</span></td><td>${esc(f.INSTITUCION_ASOCIADA)}</td>
+      <td>${esc(f.ESTADO_SELECCION)}</td><td>${esc(f.SESIONES_ASISTIDAS)}</td><td>${esc(f.SESIONES_TOTALES)}</td><td>${esc(formatoPorcentaje(f.PORCENTAJE_ASISTENCIA || 0))}</td>
+      <td><span class="badge">${esc(f.RESULTADO_FINAL || f.RESULTADO_ASISTENCIA || 'Pendiente')}</span></td><td>${esc(f.CERTIFICADO)}</td><td>${esc(f.ULTIMA_ACTUALIZACION)}</td>
+    </tr>`).join('') : '<tr><td colspan="17" class="empty-state">No se encontraron registros para los filtros seleccionados.</td></tr>';
+  }
+  function cambiarPaginaAsistencias(delta) {
+    PAGINA_ASISTENCIAS += delta;
+    renderReporteAsistencias();
+  }
+  function buscarAsistenciasConPausa() {
+    clearTimeout(TEMPORIZADOR_ASISTENCIAS);
+    TEMPORIZADOR_ASISTENCIAS = setTimeout(() => {
+      PAGINA_ASISTENCIAS = 1;
+      renderReporteAsistencias();
+    }, 220);
+  }
+  function exportarAsistenciasCsv() {
+    if (!REPORTE_ASISTENCIAS) {
+      notificar('Primero genere el listado de asistencias.', true);
+      return;
+    }
+    const filas = filasReporteAsistenciasFiltradas_();
+    if (!filas.length) {
+      notificar('No hay registros para descargar.', true);
+      return;
+    }
+    const campos = [
+      ['ID participación','ID_PARTICIPACION'], ['ID persona','ID_PERSONA'], ['Nombre completo','NOMBRE_COMPLETO'],
+      ['Documento','DOCUMENTO'], ['Correo','CORREO'], ['Teléfono','TELEFONO'], ['Comuna','COMUNA'], ['PMJH','PARTICIPA_PMJH'],
+      ['ID actividad','ID_ACTIVIDAD'], ['Capacitación','NOMBRE_ACTIVIDAD'], ['Año','ANO'], ['Escuela / línea','ESCUELA_LINEA'],
+      ['Área temática','AREA_TEMATICA'], ['Institución','INSTITUCION_ASOCIADA'], ['Modalidad','MODALIDAD'],
+      ['Estado selección','ESTADO_SELECCION'], ['Sesiones asistidas','SESIONES_ASISTIDAS'], ['Sesiones totales','SESIONES_TOTALES'],
+      ['Porcentaje asistencia','PORCENTAJE_ASISTENCIA'], ['Resultado asistencia','RESULTADO_ASISTENCIA'], ['Resultado final','RESULTADO_FINAL'],
+      ['Certificado','CERTIFICADO'], ['Última actualización','ULTIMA_ACTUALIZACION']
+    ];
+    const celda = valor => {
+      let contenido = String(valor ?? '');
+      if (/^[=+\-@]/.test(contenido)) contenido = "'" + contenido;
+      return `"${contenido.replace(/"/g, '""')}"`;
+    };
+    const lineas = [campos.map(c => celda(c[0])).join(';')].concat(filas.map(f => campos.map(c => {
+      const valor = c[1] === 'PORCENTAJE_ASISTENCIA' ? formatoPorcentaje(f[c[1]] || 0) : f[c[1]];
+      return celda(valor);
+    }).join(';')));
+    const enlace = document.createElement('a');
+    enlace.href = URL.createObjectURL(new Blob(['\ufeff' + lineas.join('\r\n')], {type:'text/csv;charset=utf-8'}));
+    enlace.download = `listado_asistencias_${new Date().toISOString().slice(0,10)}.csv`;
+    enlace.click();
+    URL.revokeObjectURL(enlace.href);
+  }
+  function exportarReporteExcel() {
+    if (!REPORTE) { notificar('Primero genere el reporte.', true); return; }
+    const xml = reporteExcelXml(REPORTE);
+    const enlace = document.createElement('a'); enlace.href = URL.createObjectURL(new Blob([xml], {type:'application/vnd.ms-excel'}));
+    enlace.download = 'reporte_sigc.xls'; enlace.click(); URL.revokeObjectURL(enlace.href);
+  }
+  function reporteExcelXml(reporte) {
+    const seguro = v => esc(v == null ? '' : v);
+    const fila = valores => `<Row>${valores.map(v => `<Cell><Data ss:Type="String">${seguro(v)}</Data></Cell>`).join('')}</Row>`;
+    const tabla = (nombre, encabezados, datos) => `<Worksheet ss:Name="${seguro(nombre)}"><Table>${fila(encabezados)}${datos.map(fila).join('')}</Table></Worksheet>`;
+    const i = reporte.indicadores || {}, d = reporte.demografia || {};
+    const indicadores = [['Fecha de actualización',reporte.fechaActualizacion],['Actividades',i.actividades],['Personas únicas',i.personasUnicas],['Participaciones',i.inscripciones],['Seleccionadas',i.seleccionadas],['Asistentes',i.asistentes],['Aprobadas',i.aprobadas],['Certificadas',i.certificadas],['Cupos ofrecidos',i.cupos],['Tasa de ocupación',formatoPorcentaje(i.ocupacion)],['Tasa de selección',formatoPorcentaje(i.seleccion)],['Tasa de asistencia',formatoPorcentaje(i.asistencia)],['Tasa de inasistencia',formatoPorcentaje(i.inasistencia)],['Tasa de aprobación',formatoPorcentaje(i.aprobacion)],['Tasa de certificación',formatoPorcentaje(i.certificacion)],['Demanda registrada',i.demandaRegistrada],['Personas capacitadas',i.personasCapacitadas],['Brecha demanda',i.brechaDemanda],['Cobertura de demanda',formatoPorcentaje(i.coberturaDemanda)],['Edad promedio',d.edadPromedio == null ? 'No disponible' : `${Number(d.edadPromedio).toFixed(1)} años`],['Personas con dato de edad',d.personasConDatoEdad || 0]];
+    const detalleCampos = ['ID_ACTIVIDAD','NOMBRE_ACTIVIDAD','ANO','ESCUELA_LINEA','AREA_TEMATICA','INSTITUCION_ASOCIADA','MODALIDAD','ESTADO_ACTIVIDAD','CUPOS','INSCRIPCIONES','SELECCIONADAS','ASISTENTES'];
+    const hojaResumen = tabla('Resumen', ['Indicador','Valor'], indicadores);
+    const hojaActividades = tabla('Actividades', detalleCampos, (reporte.actividades || []).map(x => detalleCampos.map(c => x[c])));
+    const hojaGenero = tabla('Demografia', ['Dimensión','Categoría','Cantidad'], [].concat((reporte.porGenero||[]).map(x=>['Género',x.nombre,x.valor]),(reporte.porTramoEdad||[]).map(x=>['Tramo de edad',x.nombre,x.valor]),(reporte.porComuna||[]).map(x=>['Comuna',x.nombre,x.valor]),(reporte.porPMJH||[]).map(x=>['PMJH',x.nombre,x.valor])));
+    // Apps Script reserva los delimitadores de scriptlet durante
+    // HtmlTemplate.evaluate(). Esta concatenación conserva el XML final.
+    return '<' + '?xml version="1.0"?' + '><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' + hojaResumen + hojaActividades + hojaGenero + '</Workbook>';
+  }
+  const CAMPOS_IMPORTACION = [
+    ['NOMBRE_COMPLETO','Nombre completo'], ['NOMBRES','Nombres'], ['APELLIDOS','Apellidos'], ['RUT','RUT'],
+    ['TIPO_DOCUMENTO','Tipo de documento'], ['NUMERO_DOCUMENTO','Otro documento / pasaporte'],
+    ['CORREO','Correo'], ['TELEFONO','Teléfono'], ['COMUNA','Comuna'],
+    ['NACIONALIDAD','Nacionalidad'], ['PARTICIPA_PMJH','Participa PMJH'],
+    ['FECHA_INSCRIPCION','Fecha de inscripción'], ['CONFIRMA_PARTICIPACION','Confirmación'],
+    ['SESIONES_ASISTIDAS','Sesiones asistidas'], ['SESIONES_TOTALES','Sesiones totales'],
+    ['CERTIFICADO','Certificado'], ['OBSERVACIONES','Observaciones']
+  ];
+
+  function cargarImportaciones() {
+    mostrarCarga(true, 'Cargando importaciones…');
+    google.script.run
+      .withSuccessHandler(datos => {
+        mostrarCarga(false);
+        IMPORTACION.historial = Array.isArray(datos?.historial) ? datos.historial : [];
+        IMPORTACION.baseMadre = datos?.baseMadre || IMPORTACION.baseMadre;
+        renderHistorialImportaciones();
+        renderEstadoBaseMadre();
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        notificar(error.message || String(error), true);
+      })
+      .obtenerPanelImportaciones();
+  }
+
+  function leerTablaImportacion() {
+    const textoPegado = document.getElementById('importTexto')?.value || '';
+    if (!textoPegado.trim()) return notificar('Pegue primero una tabla con encabezados.', true);
+    const matriz = parsearTablaPegada_(textoPegado);
+    if (matriz.length < 2) return notificar('La tabla debe incluir encabezados y al menos una fila.', true);
+    const ancho = Math.max(...matriz.map(fila => fila.length));
+    IMPORTACION.encabezados = matriz[0].map((valor, indice) => String(valor || `Columna ${indice + 1}`).trim());
+    while (IMPORTACION.encabezados.length < ancho) IMPORTACION.encabezados.push(`Columna ${IMPORTACION.encabezados.length + 1}`);
+    IMPORTACION.filas = matriz.slice(1)
+      .filter(fila => fila.some(valor => String(valor || '').trim()))
+      .map(fila => IMPORTACION.encabezados.map((_, indice) => fila[indice] ?? ''));
+    if (IMPORTACION.filas.length > 250) {
+      IMPORTACION.filas = IMPORTACION.filas.slice(0, 250);
+      notificar('Se cargaron las primeras 250 filas. El resto debe importarse en un segundo lote.', true);
+    }
+    renderMapeoImportacion_();
+    const panel = document.getElementById('panelMapeoImportacion');
+    panel.hidden = false;
+    panel.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+
+  function parsearTablaPegada_(textoPegado) {
+    const primeraLinea = String(textoPegado).split(/\r?\n/).find(linea => linea.trim()) || '';
+    const candidatos = ['\t',';',','];
+    const delimitador = candidatos.sort((a,b) => primeraLinea.split(b).length - primeraLinea.split(a).length)[0];
+    const filas = [];
+    let fila = [], celda = '', entreComillas = false;
+    const texto = String(textoPegado).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    for (let i = 0; i < texto.length; i++) {
+      const caracter = texto[i];
+      if (caracter === '"') {
+        if (entreComillas && texto[i + 1] === '"') { celda += '"'; i++; }
+        else entreComillas = !entreComillas;
+      } else if (caracter === delimitador && !entreComillas) {
+        fila.push(celda.trim()); celda = '';
+      } else if (caracter === '\n' && !entreComillas) {
+        fila.push(celda.trim()); filas.push(fila); fila = []; celda = '';
+      } else {
+        celda += caracter;
+      }
+    }
+    fila.push(celda.trim());
+    if (fila.some(valor => valor !== '')) filas.push(fila);
+    return filas;
+  }
+
+  function sugerirCampoImportacion_(encabezado) {
+    const h = normalizar(encabezado);
+    if (/nombre completo|nombres y apellidos|nombre y apellido/.test(h)) return 'NOMBRE_COMPLETO';
+    if (/^nombre$|^nombres$/.test(h)) return 'NOMBRES';
+    if (/apellido/.test(h)) return 'APELLIDOS';
+    if (/tipo.*document/.test(h)) return 'TIPO_DOCUMENTO';
+    if (/pasaporte|dni|numero.*document/.test(h)) return 'NUMERO_DOCUMENTO';
+    if (/(^|\s)(rut|run)(\s|$)/.test(h)) return 'RUT';
+    if (/correo|email|mail/.test(h)) return 'CORREO';
+    if (/telefono|celular|fono/.test(h)) return 'TELEFONO';
+    if (/comuna/.test(h)) return 'COMUNA';
+    if (/nacionalidad/.test(h)) return 'NACIONALIDAD';
+    if (/pmjh|jefas de hogar/.test(h)) return 'PARTICIPA_PMJH';
+    if (/fecha.*inscrip|marca temporal|timestamp/.test(h)) return 'FECHA_INSCRIPCION';
+    if (/confirm/.test(h)) return 'CONFIRMA_PARTICIPACION';
+    if (/sesiones.*asist|clases.*asist/.test(h)) return 'SESIONES_ASISTIDAS';
+    if (/sesiones.*total|clases.*total/.test(h)) return 'SESIONES_TOTALES';
+    if (/certific/.test(h)) return 'CERTIFICADO';
+    if (/observ|coment/.test(h)) return 'OBSERVACIONES';
+    return '';
+  }
+
+  function renderMapeoImportacion_() {
+    const sugerencias = {};
+    IMPORTACION.encabezados.forEach((encabezado, indice) => {
+      const campo = sugerirCampoImportacion_(encabezado);
+      if (campo && sugerencias[campo] === undefined) sugerencias[campo] = indice;
+    });
+    IMPORTACION.mapeo = sugerencias;
+    texto('importColumnasDetectadas', `${IMPORTACION.encabezados.length} columna(s) y ${IMPORTACION.filas.length} fila(s) detectadas. Confirme las equivalencias.`);
+    const opciones = '<option value="-1">No utilizar</option>' + IMPORTACION.encabezados
+      .map((encabezado, indice) => `<option value="${indice}">${esc(encabezado)}</option>`).join('');
+    document.getElementById('mapeoImportacion').innerHTML = CAMPOS_IMPORTACION.map(([campo, etiqueta]) => `<div class="field">
+      <label>${esc(etiqueta)}</label>
+      <select id="map_${campo}">${opciones}</select>
+    </div>`).join('');
+    CAMPOS_IMPORTACION.forEach(([campo]) => {
+      const selector = document.getElementById(`map_${campo}`);
+      selector.value = String(sugerencias[campo] ?? -1);
+      selector.addEventListener('change', () => {
+        IMPORTACION.analisis = null;
+        document.getElementById('btnConfirmarImportacion').disabled = true;
+      });
+    });
+    document.getElementById('resumenImportacion').hidden = true;
+    document.getElementById('btnConfirmarImportacion').disabled = true;
+    document.getElementById('tablaVistaPreviaImportacion').innerHTML = '<tr><td colspan="5" class="empty-state">Relacione las columnas y analice el listado.</td></tr>';
+  }
+
+  function construirPayloadImportacion_() {
+    const mapeo = {};
+    CAMPOS_IMPORTACION.forEach(([campo]) => {
+      mapeo[campo] = Number(document.getElementById(`map_${campo}`)?.value ?? -1);
+    });
+    if (mapeo.NOMBRE_COMPLETO < 0 && (mapeo.NOMBRES < 0 || mapeo.APELLIDOS < 0)) {
+      throw new Error('Debe relacionar Nombre completo o las columnas Nombres y Apellidos.');
+    }
+    if (mapeo.RUT < 0 && mapeo.NUMERO_DOCUMENTO < 0) throw new Error('Debe relacionar RUT u Otro documento.');
+    return {
+      idActividad: document.getElementById('importActividad')?.value || '',
+      encabezados: IMPORTACION.encabezados,
+      filas: IMPORTACION.filas,
+      mapeo,
+      valoresGenerales: {
+        TIPO_DOCUMENTO: document.getElementById('importTipoDocumento')?.value || 'RUT',
+        SESIONES_TOTALES: document.getElementById('importSesionesTotales')?.value || '1',
+        SESIONES_ASISTIDAS: document.getElementById('importSesionesAsistidas')?.value || '0',
+        CONFIRMA_PARTICIPACION: document.getElementById('importConfirma')?.value || 'No informado',
+        CERTIFICADO: document.getElementById('importCertificado')?.value || 'No informado',
+        finalizarResultado: document.getElementById('importFinalizar')?.value || 'false'
+      }
+    };
+  }
+
+  function analizarImportacionPegada() {
+    let payload;
+    try { payload = construirPayloadImportacion_(); }
+    catch (error) { return notificar(error.message, true); }
+    if (!payload.idActividad) return notificar('Seleccione la capacitación que recibirá el listado.', true);
+    mostrarCarga(true, 'Analizando listado…');
+    google.script.run
+      .withSuccessHandler(datos => {
+        mostrarCarga(false);
+        IMPORTACION.analisis = datos;
+        renderAnalisisImportacion_(datos);
+        document.getElementById('btnConfirmarImportacion').disabled = false;
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        document.getElementById('btnConfirmarImportacion').disabled = true;
+        notificar(error.message || String(error), true);
+      })
+      .analizarImportacionUniversal(payload);
+  }
+
+  function renderAnalisisImportacion_(datos) {
+    const r = datos?.resumen || {};
+    texto('impFilas', r.filas || 0); texto('impNuevas', r.nuevas || 0);
+    texto('impExistentes', r.existentes || 0); texto('impDuplicadas', r.duplicadas || 0);
+    texto('impRevision', r.revision || 0);
+    document.getElementById('resumenImportacion').hidden = false;
+    const filas = datos?.vistaPrevia || [];
+    document.getElementById('tablaVistaPreviaImportacion').innerHTML = filas.length ? filas.map(f => `<tr>
+      <td>${esc(f.fila)}</td><td><strong>${esc(f.nombre || 'Sin nombre')}</strong></td><td>${esc(f.documento || '—')}</td>
+      <td><span class="badge">${esc(f.estado)}</span></td><td>${esc(f.detalle)}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty-state">No hay filas para mostrar.</td></tr>';
+  }
+
+  function confirmarImportacionPegada() {
+    if (!IMPORTACION.analisis) return notificar('Primero analice el listado.', true);
+    let payload;
+    try { payload = construirPayloadImportacion_(); }
+    catch (error) { return notificar(error.message, true); }
+    document.getElementById('btnConfirmarImportacion').disabled = true;
+    mostrarCarga(true, 'Importando registros…');
+    google.script.run
+      .withSuccessHandler(resultado => {
+        mostrarCarga(false);
+        notificar(resultado.mensaje || 'Importación finalizada.');
+        IMPORTACION.analisis = null;
+        MODULOS_CARGADOS.delete('personas');
+        MODULOS_CARGADOS.delete('participaciones');
+        cargarImportaciones();
+      })
+      .withFailureHandler(error => {
+        mostrarCarga(false);
+        document.getElementById('btnConfirmarImportacion').disabled = false;
+        notificar(error.message || String(error), true);
+      })
+      .importarCapacitacionHistoricaUniversal(payload);
+  }
+
+  function cerrarMapeoImportacion() {
+    document.getElementById('panelMapeoImportacion').hidden = true;
+  }
+
+  function analizarBaseMadreWeb() {
+    const url = document.getElementById('baseMadreUrl')?.value.trim() || '';
+    if (!url) return notificar('Pegue la URL de la pestaña de respuestas.', true);
+    mostrarCarga(true, 'Analizando base madre…');
+    google.script.run
+      .withSuccessHandler(resultado => {
+        mostrarCarga(false);
+        texto('estadoBaseMadre', `${resultado.archivo} · ${resultado.hoja}: ${resultado.totalRespuestas} respuesta(s), ${resultado.columnas} columna(s). ${resultado.listaPreparada ? 'Columnas mínimas reconocidas.' : 'Faltan columnas mínimas.'}`);
+      })
+      .withFailureHandler(error => { mostrarCarga(false); notificar(error.message || String(error), true); })
+      .analizarBaseMadreDesdeWeb({url});
+  }
+
+  function vincularBaseMadreWeb() {
+    const url = document.getElementById('baseMadreUrl')?.value.trim() || '';
+    if (!url) return notificar('Pegue la URL de la pestaña de respuestas.', true);
+    mostrarCarga(true, 'Vinculando base madre…');
+    google.script.run
+      .withSuccessHandler(resultado => {
+        mostrarCarga(false);
+        IMPORTACION.baseMadre = {idConfig:resultado.idConfig, hoja:resultado.hoja, estado:'Activo'};
+        renderEstadoBaseMadre();
+        notificar(resultado.mensaje);
+      })
+      .withFailureHandler(error => { mostrarCarga(false); notificar(error.message || String(error), true); })
+      .vincularBaseMadreDesdeWeb({url});
+  }
+
+  function probarBaseMadreWeb() {
+    procesarLoteBaseMadreWeb(100, false, {procesadas:0, creadas:0, actualizadas:0, intereses:0});
+  }
+
+  function procesarBaseMadreCompletaWeb() {
+    if (!confirm('Se procesará la base completa automáticamente en lotes de 500. Puede cerrar esta ventana y retomar después sin duplicar registros. ¿Desea continuar?')) return;
+    procesarLoteBaseMadreWeb(500, true, {procesadas:0, creadas:0, actualizadas:0, intereses:0});
+  }
+
+  function procesarLoteBaseMadreWeb(limite, continuar, acumulado) {
+    const idConfig = IMPORTACION.baseMadre?.idConfig || '';
+    if (!idConfig) return notificar('Vincule primero la base madre.', true);
+    acumulado = acumulado || {procesadas:0, creadas:0, actualizadas:0, intereses:0};
+    mostrarCarga(true, continuar
+      ? `Procesando base madre… ${acumulado.procesadas} respuesta(s) completada(s)`
+      : 'Procesando lote de prueba de la base madre…');
+    google.script.run
+      .withSuccessHandler(resultado => {
+        const r = resultado.resultado || {};
+        acumulado.procesadas += Number(r.resueltas || 0);
+        acumulado.creadas += Number(r.personasCreadas || 0);
+        acumulado.actualizadas += Number(r.personasActualizadas || 0);
+        acumulado.intereses += Number(r.interesesGuardados || 0);
+        texto('estadoBaseMadre', `${resultado.mensaje} Acumulado: ${acumulado.procesadas} respuestas, ${acumulado.creadas} personas creadas, ${acumulado.actualizadas} actualizadas y ${acumulado.intereses} intereses nuevos.`);
+        if (continuar && Number(r.restantes || 0) > 0 && Number(r.resueltas || 0) > 0) {
+          setTimeout(() => procesarLoteBaseMadreWeb(500, true, acumulado), 150);
+          return;
+        }
+        mostrarCarga(false);
+        if (continuar && Number(r.restantes || 0) > 0) {
+          notificar('El proceso se detuvo porque el último lote no pudo resolver registros. Revise DETALLE_PROCESO antes de retomarlo.', true);
+        } else {
+          notificar(continuar
+            ? `Migración completada: ${acumulado.procesadas} respuestas procesadas y ${acumulado.intereses} intereses incorporados.`
+            : resultado.mensaje,
+          Number(r.revision || 0) > 0);
+        }
+      })
+      .withFailureHandler(error => { mostrarCarga(false); notificar(error.message || String(error), true); })
+      .procesarLoteBaseMadreDesdeWeb({idConfig, limite:Number(limite || 100)});
+  }
+
+  function renderEstadoBaseMadre() {
+    const base = IMPORTACION.baseMadre;
+    const boton = document.getElementById('btnMigrarBaseMadre');
+    const botonPrueba = document.getElementById('btnProbarBaseMadre');
+    if (!base) {
+      texto('estadoBaseMadre', 'Todavía no existe una base madre vinculada.');
+      if (boton) boton.disabled = true;
+      if (botonPrueba) botonPrueba.disabled = true;
+      return;
+    }
+    texto('estadoBaseMadre', `Vinculada: ${base.hoja || 'Hoja de respuestas'} · Estado: ${base.estado || 'Activo'}${base.fechaVinculacion ? ' · ' + base.fechaVinculacion : ''}.`);
+    if (boton) boton.disabled = normalizar(base.estado) !== 'activo';
+    if (botonPrueba) botonPrueba.disabled = normalizar(base.estado) !== 'activo';
+  }
+
+  function renderHistorialImportaciones() {
+    const tbody = document.getElementById('tablaHistorialImportaciones');
+    if (!tbody) return;
+    if (!IMPORTACION.historial.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No hay importaciones registradas.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = IMPORTACION.historial.map(f => `<tr>
+      <td>${esc(f.ID_IMPORTACION)}</td><td>${esc(f.FECHA)}</td><td>${esc(f.TIPO)}</td>
+      <td>${esc(f.ACTIVIDAD || f.ID_ACTIVIDAD || '—')}</td><td>${esc(f.FILAS_RECIBIDAS || 0)}</td>
+      <td>${esc(f.PERSONAS_CREADAS || 0)}</td><td>${esc(f.PERSONAS_ACTUALIZADAS || 0)}</td>
+      <td>${esc(f.REVISION || 0)}</td><td><span class="badge">${esc(f.ESTADO || '—')}</span></td>
+    </tr>`).join('');
+  }
+
+  actualizarAreasReporte();
+  document.addEventListener('DOMContentLoaded', function() {
+    cargarDatos();
+  });
+  window.addEventListener('load', function() {
+    if (DB && DB.graficos) renderGraficos();
+  });
+</script>

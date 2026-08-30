@@ -1,0 +1,93 @@
+<section id="asistencia-qr" class="view">
+  <div class="section-head">
+    <div>
+      <h2>Control de Asistencia por Código QR</h2>
+      <p>Proyecta el código QR para que los alumnos lo escaneen o usa la cámara para escanear sus identificaciones.</p>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+    <!-- Panel 1: Generar QR para la sesión -->
+    <div class="card panel">
+      <h3 style="margin-top: 0;">1. Sesión y Código QR</h3>
+      <div class="form-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="field full">
+          <label for="qrActividadSelect">Capacitación / Taller</label>
+          <select id="qrActividadSelect" onchange="cargarDetalleSesionQR()">
+            <option value="">Seleccione una actividad...</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="qrNumeroSesion">N° de Sesión</label>
+          <input id="qrNumeroSesion" type="number" min="1" max="50" value="1">
+        </div>
+
+        <div class="field">
+          <label for="qrMinutosValidez">Vigencia (Minutos)</label>
+          <input id="qrMinutosValidez" type="number" min="15" max="480" value="180">
+        </div>
+
+        <div class="field full" style="margin-top: 8px;">
+          <button class="btn" style="width: 100%;" onclick="generarCodigoQRSesion()">📱 Generar QR para Proyección</button>
+        </div>
+      </div>
+
+      <div id="qrDisplayContainer" style="display: none; text-align: center; margin-top: 20px; padding: 16px; border: 1px dashed var(--borde); border-radius: 12px; background: var(--fondo);">
+        <div id="qrCanvas" style="display: inline-block; padding: 12px; background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);"></div>
+        <p id="qrTokenInfo" style="margin: 10px 0 4px; font-weight: bold; color: var(--azul);"></p>
+        <small id="qrExpiraInfo" style="color: var(--gris);"></small>
+      </div>
+    </div>
+
+    <!-- Panel 2: Escáner y Registro en Vivo -->
+    <div class="card panel">
+      <h3 style="margin-top: 0;">2. Escáner / Marcado Manual</h3>
+      <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+        <button id="btnToggleCamara" class="btn secondary" style="flex: 1;" onclick="toggleCamaraQR()">📷 Activar Cámara</button>
+      </div>
+
+      <div id="qrReaderWrapper" style="display: none; margin-bottom: 14px; border-radius: 10px; overflow: hidden; border: 1px solid var(--borde);">
+        <div id="qrReader" style="width: 100%;"></div>
+      </div>
+
+      <div class="field full">
+        <label for="qrInputManual">Ingreso manual (RUT o Documento)</label>
+        <div style="display: flex; gap: 8px;">
+          <input id="qrInputManual" placeholder="Ej: 12.345.678-9" onkeyup="if(event.key==='Enter') registrarAsistenciaManualQR()">
+          <button class="btn" type="button" onclick="registrarAsistenciaManualQR()">Marcar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Listado de Asistencias de la Sesión -->
+  <div class="card panel">
+    <div class="section-head" style="margin-bottom: 12px;">
+      <div>
+        <h3 style="margin: 0;">Registro de Asistencias de la Sesión</h3>
+        <p id="qrAsistenciasTotal" style="margin: 4px 0 0 0; font-size: 13px; color: var(--gris);">0 personas registradas en esta sesión.</p>
+      </div>
+    </div>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Hora Marcación</th>
+            <th>Documento</th>
+            <th>Nombre del Alumno</th>
+            <th>Sesión</th>
+            <th>Sesiones Totales Asistidas</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody id="tablaLogAsistenciaQR">
+          <tr>
+            <td colspan="6" style="text-align: center; color: var(--gris); padding: 20px;">Sin marcaciones en la sesión activa.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,176 @@
+<script>
+/**
+ * LÓGICA DE CLIENTE: MÓDULO DE ASISTENCIA RÁPIDA POR CÓDIGO QR
+ */
+
+let QR_TOKEN_ACTIVO = null;
+let QR_HTML5_SCANNER = null;
+let LOG_ASISTENCIAS_QR = [];
+
+function cargarDetalleSesionQR() {
+  const select = document.getElementById('qrActividadSelect');
+  const idActividad = select ? select.value : '';
+  if (!idActividad) return;
+
+  const act = (DATOS.actividades || []).find(a => String(a.ID_ACTIVIDAD) === String(idActividad));
+  if (act) {
+    const sesionInput = document.getElementById('qrNumeroSesion');
+    if (sesionInput) sesionInput.value = 1;
+  }
+}
+
+function generarCodigoQRSesion() {
+  const select = document.getElementById('qrActividadSelect');
+  const idActividad = select ? select.value : '';
+  if (!idActividad) {
+    mostrarToast('warning', 'Seleccione una capacitación.');
+    return;
+  }
+
+  const sesion = document.getElementById('qrNumeroSesion').value || 1;
+  const minutos = document.getElementById('qrMinutosValidez').value || 180;
+
+  mostrarToast('info', 'Generando token seguro de sesión...');
+  google.script.run
+    .withSuccessHandler((res) => {
+      if (res && res.token) {
+        QR_TOKEN_ACTIVO = res.token;
+        const display = document.getElementById('qrDisplayContainer');
+        const canvas = document.getElementById('qrCanvas');
+        const tokenInfo = document.getElementById('qrTokenInfo');
+        const expiraInfo = document.getElementById('qrExpiraInfo');
+
+        // Generar imagen QR limpia usando QR Server API
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(res.token)}`;
+        canvas.innerHTML = `<img src="${qrUrl}" alt="QR Asistencia" style="width:200px; height:200px; display:block; margin:0 auto; border-radius:4px;">`;
+        
+        tokenInfo.textContent = `Sesión N° ${res.numeroSesion} - Token: ${res.token}`;
+        expiraInfo.textContent = `Válido hasta las ${res.expira}`;
+        display.style.display = 'block';
+
+        mostrarToast('success', '¡Código QR de asistencia listo para proyectar!');
+      }
+    })
+    .withFailureHandler((err) => {
+      mostrarToast('error', 'Error generando QR: ' + err.message);
+    })
+    .webGenerarTokenSesionQR(idActividad, sesion, minutos);
+}
+
+function toggleCamaraQR() {
+  const wrapper = document.getElementById('qrReaderWrapper');
+  const btn = document.getElementById('btnToggleCamara');
+  if (!wrapper || !btn) return;
+
+  if (QR_HTML5_SCANNER) {
+    QR_HTML5_SCANNER.stop().then(() => {
+      QR_HTML5_SCANNER.clear();
+      QR_HTML5_SCANNER = null;
+      wrapper.style.display = 'none';
+      btn.textContent = '📷 Activar Cámara';
+      mostrarToast('info', 'Cámara detenida.');
+    }).catch(err => console.error(err));
+    return;
+  }
+
+  if (typeof Html5Qrcode === 'undefined') {
+    mostrarToast('warning', 'Cargando módulo de cámara...');
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/html5-qrcode';
+    script.onload = () => iniciarCamaraQREjecutar();
+    document.head.appendChild(script);
+  } else {
+    iniciarCamaraQREjecutar();
+  }
+}
+
+function iniciarCamaraQREjecutar() {
+  const wrapper = document.getElementById('qrReaderWrapper');
+  const btn = document.getElementById('btnToggleCamara');
+  wrapper.style.display = 'block';
+  btn.textContent = '⏹ Detener Cámara';
+
+  QR_HTML5_SCANNER = new Html5Qrcode("qrReader");
+  QR_HTML5_SCANNER.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: { width: 250, height: 250 } },
+    (decodedText) => {
+      // Escaneo exitoso
+      procesarMarcacionAsistencia(decodedText);
+    },
+    (errorMessage) => {
+      // Ignorar errores de frame no detectado
+    }
+  ).catch(err => {
+    mostrarToast('error', 'No se pudo acceder a la cámara: ' + err);
+    btn.textContent = '📷 Activar Cámara';
+    wrapper.style.display = 'none';
+    QR_HTML5_SCANNER = null;
+  });
+}
+
+function registrarAsistenciaManualQR() {
+  const input = document.getElementById('qrInputManual');
+  if (!input) return;
+  const doc = input.value.trim();
+  if (!doc) {
+    mostrarToast('warning', 'Ingrese un RUT o número de documento.');
+    return;
+  }
+  procesarMarcacionAsistencia(doc);
+  input.value = '';
+}
+
+function procesarMarcacionAsistencia(valorDetectado) {
+  if (!QR_TOKEN_ACTIVO) {
+    mostrarToast('warning', 'Primero genera el código QR de la sesión activa.');
+    return;
+  }
+
+  mostrarToast('info', `Registrando asistencia para: ${valorDetectado}...`);
+  google.script.run
+    .withSuccessHandler((res) => {
+      mostrarToast('success', `✓ ${res.mensaje} (${res.persona})`);
+      
+      const horaActual = new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      LOG_ASISTENCIAS_QR.unshift({
+        hora: horaActual,
+        documento: res.documento,
+        persona: res.persona,
+        sesion: res.sesion,
+        total: res.sesionesAsistidas,
+        estado: 'Presente'
+      });
+
+      actualizarTablaLogQR();
+    })
+    .withFailureHandler((err) => {
+      mostrarToast('error', err.message);
+    })
+    .webRegistrarAsistenciaQR(QR_TOKEN_ACTIVO, valorDetectado);
+}
+
+function actualizarTablaLogQR() {
+  const tbody = document.getElementById('tablaLogAsistenciaQR');
+  const count = document.getElementById('qrAsistenciasTotal');
+  if (!tbody) return;
+
+  if (count) count.textContent = `${LOG_ASISTENCIAS_QR.length} personas registradas en esta sesión.`;
+
+  if (!LOG_ASISTENCIAS_QR.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--gris); padding: 20px;">Sin marcaciones en la sesión activa.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = LOG_ASISTENCIAS_QR.map(item => `
+    <tr>
+      <td><strong>${item.hora}</strong></td>
+      <td>${item.documento}</td>
+      <td>${item.persona}</td>
+      <td>Sesión ${item.sesion}</td>
+      <td>${item.total}</td>
+      <td><span class="badge success">${item.estado}</span></td>
+    </tr>
+  `).join('');
+}
+</script>

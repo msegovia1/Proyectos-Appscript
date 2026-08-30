@@ -1,0 +1,123 @@
+<script>
+/**
+ * SISTEMA DE INTERFAZ, NOTIFICACIONES TOAST Y MODALES SIGC
+ */
+
+function mostrarToast(tipo, mensaje, duracion = 4000) {
+  let contenedor = document.querySelector('.toast-container');
+  if (!contenedor) {
+    contenedor = document.createElement('div');
+    contenedor.className = 'toast-container';
+    document.body.appendChild(contenedor);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `toast ${tipo || 'info'}`;
+  
+  const iconos = {
+    success: '✓',
+    error: '✕',
+    warning: '⚠',
+    info: 'ℹ'
+  };
+
+  toast.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <strong style="font-size: 16px;">${iconos[tipo] || 'ℹ'}</strong>
+      <span>${mensaje}</span>
+    </div>
+    <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
+  `;
+
+  contenedor.appendChild(toast);
+
+  if (duracion > 0) {
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(10px)';
+      setTimeout(() => toast.remove(), 200);
+    }, duracion);
+  }
+}
+
+function toggleMobileSidebar(forzarCierre) {
+  const sidebar = document.querySelector('.sidebar');
+  const overlay = document.querySelector('.sidebar-overlay');
+  if (!sidebar || !overlay) return;
+
+  if (forzarCierre === true) {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('active');
+  } else {
+    sidebar.classList.toggle('open');
+    overlay.classList.toggle('active');
+  }
+}
+
+function abrirModalConfiguracion() {
+  const modal = document.getElementById('modalConfiguracion');
+  if (modal) {
+    modal.style.display = 'flex';
+    const input = document.getElementById('cfgSpreadsheetId');
+    if (input && window.SIGC_SPREADSHEET_ID) {
+      input.value = window.SIGC_SPREADSHEET_ID;
+    }
+  }
+}
+
+function cerrarModalConfiguracion() {
+  const modal = document.getElementById('modalConfiguracion');
+  if (modal) modal.style.display = 'none';
+}
+
+function probarConexionModal() {
+  const input = document.getElementById('cfgSpreadsheetId');
+  const msg = document.getElementById('cfgStatusMsg');
+  if (!input || !msg) return;
+
+  const id = input.value.trim();
+  if (!id) {
+    mostrarToast('warning', 'Ingrese un ID de planilla.');
+    return;
+  }
+
+  msg.style.display = 'block';
+  msg.textContent = 'Probando conexión con Google Sheets...';
+  msg.style.color = 'var(--azul)';
+
+  google.script.run
+    .withSuccessHandler((res) => {
+      msg.textContent = '✓ Conexión exitosa: ' + (res.archivo || 'Planilla conectada');
+      msg.style.color = 'var(--verde)';
+      mostrarToast('success', 'Planilla verificada correctamente.');
+    })
+    .withFailureHandler((err) => {
+      msg.textContent = '✕ Error: ' + err.message;
+      msg.style.color = 'var(--rojo)';
+      mostrarToast('error', 'Error al conectar: ' + err.message);
+    })
+    .probarConexionSIGC();
+}
+
+function guardarConfiguracionModal() {
+  const input = document.getElementById('cfgSpreadsheetId');
+  if (!input) return;
+  const nuevoId = input.value.trim();
+  if (!nuevoId) {
+    mostrarToast('warning', 'Ingrese un ID válido.');
+    return;
+  }
+
+  mostrarToast('info', 'Guardando configuración...');
+  google.script.run
+    .withSuccessHandler((res) => {
+      mostrarToast('success', res.mensaje || 'Configuración guardada.');
+      cerrarModalConfiguracion();
+      setTimeout(() => cargarDatos(true), 1000);
+    })
+    .withFailureHandler((err) => {
+      mostrarToast('error', 'No se pudo guardar: ' + err.message);
+    })
+    .webGuardarSpreadsheetId(nuevoId);
+}
+</script>
