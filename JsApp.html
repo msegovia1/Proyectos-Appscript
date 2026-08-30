@@ -1,5 +1,7 @@
 <script>
 let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda:{resumen:{},filas:[],detalle:[]}, graficos:{}, resumen:{}};
+  window.DB = DB;
+  window.DATOS = DB;
   let GESTION = {actividad:null, participaciones:[], resumen:{}};
   let COMUNICACIONES = {destinatarios:[], resumen:{}};
   let DEMANDA_DETALLE_ACTUAL = [];
@@ -34,8 +36,10 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
       document.querySelectorAll('.menu button').forEach(x => x.classList.remove('active'));
       document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
       btn.classList.add('active');
-      document.getElementById(btn.dataset.view).classList.add('active');
-      document.getElementById('tituloVista').textContent = btn.textContent.replace(/^[^A-Za-zÁÉÍÓÚÑ]+/, '').trim();
+      const targetView = document.getElementById(btn.dataset.view);
+      if (targetView) targetView.classList.add('active');
+      const titulo = document.getElementById('tituloVista');
+      if (titulo) titulo.textContent = btn.textContent.replace(/^[^A-Za-zÁÉÍÓÚÑ]+/, '').trim();
       cargarVistaBajoDemanda(btn.dataset.view);
     });
   });
@@ -45,19 +49,27 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
     mostrarCarga(!resumenLocal);
     google.script.run
       .withSuccessHandler(datos => {
+        if (!datos) {
+          mostrarCarga(false);
+          return;
+        }
         DB.resumen = datos.resumen || {};
         DB.graficos = datos.graficos || {};
         const segundos = ((performance.now() - inicioCarga) / 1000).toFixed(1);
-        document.getElementById('ultimaActualizacion').textContent =
-          (datos.desdeResumenPersistente ? 'Resumen guardado: ' : 'Actualizado: ') +
-          datos.fechaActualizacion + ' · carga ' + segundos + ' s';
+        const elAct = document.getElementById('ultimaActualizacion');
+        if (elAct) {
+          elAct.textContent =
+            (datos.desdeResumenPersistente ? 'Resumen guardado: ' : 'Actualizado: ') +
+            (datos.fechaActualizacion || 'Hoy') + ' · carga ' + segundos + ' s';
+        }
         renderDashboard();
         guardarDashboardLocal_(datos);
         mostrarCarga(false);
       })
       .withFailureHandler(error => {
         mostrarCarga(false);
-        notificar(error.message || String(error), true);
+        const msg = error.message || String(error);
+        notificar(msg, true);
       })
       .obtenerDashboardLiviano(forzar === true);
   }
@@ -106,6 +118,18 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
   }
   function cargarVistaBajoDemanda(vista) {
     if (vista === 'dashboard') return;
+    if (vista === 'certificados') {
+      asegurarModulo('participaciones', function() {
+        if (typeof cargarParticipantesCertificado === 'function') cargarParticipantesCertificado();
+      });
+      return;
+    }
+    if (vista === 'asistencia-qr') {
+      asegurarModulo('actividades', function() {
+        if (typeof cargarDetalleSesionQR === 'function') cargarDetalleSesionQR();
+      });
+      return;
+    }
     if (vista === 'formularios') {
       asegurarModulo('actividades', cargarFormularios);
       return;
@@ -1542,16 +1566,26 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
     const panel = document.getElementById('loading');
     const etiqueta = document.getElementById('loadingTexto');
     if (estado && etiqueta) etiqueta.textContent = mensaje;
-    panel.classList.toggle('show', CARGAS_ACTIVAS > 0);
+    if (panel) panel.classList.toggle('show', CARGAS_ACTIVAS > 0);
   }
-  function texto(id, valor) { document.getElementById(id).textContent = valor ?? ''; }
+  function texto(id, valor) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = valor ?? '';
+  }
   function formatoPorcentaje(v) { return new Intl.NumberFormat('es-CL',{style:'percent',maximumFractionDigits:1}).format(v || 0); }
   function normalizar(v) { return String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
   function esc(v) { return String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
   function notificar(mensaje, error=false) {
+    if (typeof mostrarToast === 'function') {
+      mostrarToast(error ? 'error' : 'success', mensaje);
+    }
     const t = document.getElementById('toast');
-    t.textContent = mensaje; t.className = 'toast' + (error ? ' error' : '');
-    t.style.display = 'block'; setTimeout(() => t.style.display='none', 4200);
+    if (t) {
+      t.textContent = mensaje;
+      t.className = 'toast' + (error ? ' error' : '');
+      t.style.display = 'block';
+      setTimeout(() => { if (t) t.style.display = 'none'; }, 4200);
+    }
   }
   function cargarReporte() {
     mostrarCarga(true, 'Generando reporte…');

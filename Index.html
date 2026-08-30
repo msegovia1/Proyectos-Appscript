@@ -70,10 +70,14 @@
   </main>
 </div>
 
+<!-- Elementos de carga y compatibilidad de notificaciones -->
+<div id="loading" class="loading"><div class="spinner"></div><span id="loadingTexto">Cargando…</span></div>
+<div id="toast" class="toast" style="display:none;"></div>
+
 <!-- Modal de Configuración -->
 <?!= incluir('ModalConfig'); ?>
 
-<!-- Contenedor para notificaciones flotantes -->
+<!-- Contenedor para notificaciones flotantes modernas -->
 <div class="toast-container"></div>
 
 <!-- Inclusión de Scripts de Cliente -->

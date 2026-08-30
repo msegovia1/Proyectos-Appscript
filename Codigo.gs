@@ -15,7 +15,19 @@ function asegurarEstructuraPersonas_() {
   asegurarColumna_(hoja, 'NUMERO_DOCUMENTO');
 }
 function sigcSpreadsheetCentral_() {
-  return SpreadsheetApp.openById(SIGC_CONFIG.SPREADSHEET_ID);
+  const id = SIGC_CONFIG.SPREADSHEET_ID;
+  if (id && String(id).trim().length > 10) {
+    try {
+      return SpreadsheetApp.openById(String(id).trim());
+    } catch (e) {
+      console.warn('No se pudo abrir por ID (' + id + '): ' + e.message);
+    }
+  }
+  try {
+    const activa = SpreadsheetApp.getActiveSpreadsheet();
+    if (activa) return activa;
+  } catch (e) {}
+  throw new Error('No se pudo conectar con la planilla de Google Sheets. Configure el ID en el botón Configurar.');
 }
 function asegurarColumna_(hoja, encabezado) {
   const ultimaColumna = Math.max(hoja.getLastColumn(), 1);

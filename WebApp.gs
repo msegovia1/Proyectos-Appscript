@@ -22,7 +22,7 @@ function incluir(nombreArchivo) {
   return HtmlService.createHtmlOutputFromFile(nombreArchivo).getContent();
 }
 function probarConexionSIGC() {
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   return {
     ok: true,
     version: SIGC_CONFIG.VERSION,
@@ -35,7 +35,7 @@ function probarConexionSIGC() {
  * Entrega dashboard, tablas y selectores a la interfaz principal.
  */
 function obtenerDatosDashboard() {
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   const personas = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PERSONAS);
   const actividades = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.ACTIVIDADES);
   const participaciones = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PARTICIPACIONES);
@@ -142,7 +142,7 @@ function obtenerDashboardLiviano(forzarActualizacion) {
       // Una instantánea dañada o no disponible se reemplaza al recalcular.
     }
   }
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   const personas = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PERSONAS);
   const actividades = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.ACTIVIDADES);
   const participaciones = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PARTICIPACIONES);
@@ -180,7 +180,7 @@ function obtenerDashboardLiviano(forzarActualizacion) {
 /** Datos detallados bajo demanda. Evita descargarlos durante la apertura. */
 function obtenerDatosModulo(nombreModulo) {
   const modulo = String(nombreModulo || '').toLowerCase();
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   if (modulo === 'actividades') return {actividades: webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.ACTIVIDADES)};
   if (modulo === 'personas') {
     const personas = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PERSONAS).map(webNormalizarPersonaSalida_);
@@ -249,7 +249,7 @@ function webEnriquecerParticipaciones_(participaciones, personas, actividades) {
 /** Reporte filtrado calculado en servidor. */
 function obtenerReporteEstadistico(filtros) {
   filtros = filtros || {};
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   const personas = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PERSONAS).map(webNormalizarPersonaSalida_);
   let actividades = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.ACTIVIDADES);
   const coincide = function(valor, filtro) {
@@ -330,7 +330,7 @@ function obtenerReporteAsistencias(filtros) {
   if (!String(filtros.idActividad || '').trim()) {
     throw new Error('Seleccione una capacitación para generar el listado de asistencias.');
   }
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   const personas = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PERSONAS)
     .map(webNormalizarPersonaSalida_);
   const actividades = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.ACTIVIDADES);
@@ -417,7 +417,7 @@ function guardarInteresCapacitacion(datos) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const persona = webBuscarRegistro_(
       ss,
       WEBAPP_CONFIG.HOJAS.PERSONAS,
@@ -478,7 +478,7 @@ function actualizarEstadoInteres(idInteres, estado) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const hoja = webAsegurarHojaIntereses_(ss);
     const tabla = webLeerTablaConFilas_(hoja);
     const fila = tabla.filas.find(function(item) {
@@ -498,7 +498,7 @@ function actualizarEstadoInteres(idInteres, estado) {
 
 /** Devuelve la matriz Demanda -> Capacitación efectiva. */
 function obtenerAnalisisDemanda() {
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   const personas = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PERSONAS);
   const actividades = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.ACTIVIDADES);
   const participaciones = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PARTICIPACIONES);
@@ -513,7 +513,7 @@ function obtenerAnalisisDemanda() {
  */
 function obtenerDestinatariosComunicacion(filtros) {
   filtros = filtros || {};
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   const personas = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PERSONAS);
   const actividades = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.ACTIVIDADES);
   const participaciones = webLeerTabla_(ss, WEBAPP_CONFIG.HOJAS.PARTICIPACIONES)
@@ -611,7 +611,7 @@ function guardarPersona(datos) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const hoja = ss.getSheetByName(WEBAPP_CONFIG.HOJAS.PERSONAS);
     if (!hoja) throw new Error('No se encontró la hoja PERSONAS.');
     webAsegurarColumna_(hoja, 'TIPO_DOCUMENTO');
@@ -807,7 +807,7 @@ function actualizarPersona(datos) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const hoja = ss.getSheetByName(WEBAPP_CONFIG.HOJAS.PERSONAS);
     if (!hoja) throw new Error('No se encontró la hoja PERSONAS.');
     webAsegurarColumna_(hoja, 'TIPO_DOCUMENTO');
@@ -879,7 +879,7 @@ function guardarActividad(datos) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const hoja = ss.getSheetByName(WEBAPP_CONFIG.HOJAS.ACTIVIDADES);
     if (!hoja) throw new Error('No se encontró la hoja ACTIVIDADES.');
     const tabla = webLeerTablaConFilas_(hoja);
@@ -947,7 +947,7 @@ function actualizarActividad(datos) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const hojaActividades = ss.getSheetByName(
       WEBAPP_CONFIG.HOJAS.ACTIVIDADES
     );
@@ -1186,7 +1186,7 @@ function actualizarActividad(datos) {
 
 /** Revisa vínculos antes de quitar una actividad. No modifica datos. */
 function obtenerImpactoQuitarActividad(idActividad) {
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   const impacto = webCalcularImpactoQuitarActividad_(ss, idActividad);
   return {
     idActividad: impacto.idActividad,
@@ -1212,7 +1212,7 @@ function quitarActividad(payload) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const impacto = webCalcularImpactoQuitarActividad_(ss, payload.idActividad);
     if (webEsActividadArchivada_(impacto.filaActividad.datos)) {
       throw new Error('La actividad ya está archivada.');
@@ -1300,7 +1300,7 @@ function guardarParticipacion(datos) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const hoja = ss.getSheetByName(WEBAPP_CONFIG.HOJAS.PARTICIPACIONES);
     if (!hoja) throw new Error('No se encontró la hoja PARTICIPACIONES.');
     const tabla = webLeerTablaConFilas_(hoja);
@@ -1408,7 +1408,7 @@ function obtenerGestionActividad(idActividad) {
     {ID_ACTIVIDAD: idActividad},
     ['ID_ACTIVIDAD']
   );
-  const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+  const ss = sigcSpreadsheetCentral_();
   const actividad = webBuscarRegistro_(
     ss,
     WEBAPP_CONFIG.HOJAS.ACTIVIDADES,
@@ -1498,7 +1498,7 @@ function guardarGestionMasiva(payload) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const ss = SpreadsheetApp.openById(WEBAPP_CONFIG.SPREADSHEET_ID);
+    const ss = sigcSpreadsheetCentral_();
     const hoja = ss.getSheetByName(WEBAPP_CONFIG.HOJAS.PARTICIPACIONES);
     if (!hoja) throw new Error('No se encontró la hoja PARTICIPACIONES.');
     const actividad = webBuscarRegistro_(
