@@ -118,18 +118,6 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
   }
   function cargarVistaBajoDemanda(vista) {
     if (vista === 'dashboard') return;
-    if (vista === 'certificados') {
-      asegurarModulo('participaciones', function() {
-        if (typeof cargarParticipantesCertificado === 'function') cargarParticipantesCertificado();
-      });
-      return;
-    }
-    if (vista === 'asistencia-qr') {
-      asegurarModulo('actividades', function() {
-        if (typeof cargarDetalleSesionQR === 'function') cargarDetalleSesionQR();
-      });
-      return;
-    }
     if (vista === 'formularios') {
       asegurarModulo('actividades', cargarFormularios);
       return;
@@ -176,21 +164,47 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
     crearGrafico('chartEfectiva', 'bar', DB.graficos.participacionEfectivaPorActividad.slice(0,10), true);
   }
   function crearGrafico(id, tipo, datos, horizontal=false) {
+    if (!datos || !datos.length) return;
+    const el = document.getElementById(id);
+    if (!el) return;
     if (charts[id]) charts[id].destroy();
-    charts[id] = new Chart(document.getElementById(id), {
+    const paletaModerna = [
+      '#1e3a8a', '#10b981', '#f59e0b', '#ef4444',
+      '#8b5cf6', '#0ea5e9', '#6366f1', '#ec4899',
+      '#14b8a6', '#f97316'
+    ];
+    charts[id] = new Chart(el, {
       type: tipo,
       data: {
         labels: datos.map(x => x.nombre),
         datasets: [{
           data: datos.map(x => x.valor),
-          backgroundColor: ['#1f5f91','#2d8a62','#f1b82d','#c6383e','#6e54a3','#3a8da8','#7a9b45','#d17838','#516273','#9c5674']
+          backgroundColor: paletaModerna.slice(0, datos.length),
+          borderRadius: tipo === 'bar' ? 6 : 0,
+          borderWidth: tipo === 'doughnut' ? 2 : 0,
+          borderColor: '#ffffff'
         }]
       },
       options: {
-        responsive:true, maintainAspectRatio:false,
+        responsive: true,
+        maintainAspectRatio: false,
         indexAxis: horizontal ? 'y' : 'x',
-        plugins:{ legend:{ display: tipo === 'doughnut', position:'bottom' } },
-        scales: tipo === 'bar' ? { y: horizontal ? {} : {beginAtZero:true, ticks:{precision:0}}, x: horizontal ? {beginAtZero:true, ticks:{precision:0}} : {} } : {}
+        plugins: {
+          legend: {
+            display: tipo === 'doughnut',
+            position: 'bottom',
+            labels: { boxWidth: 12, padding: 14, font: { size: 12, family: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto' } }
+          },
+          tooltip: {
+            padding: 10,
+            cornerRadius: 8,
+            boxPadding: 4
+          }
+        },
+        scales: tipo === 'bar' ? {
+          y: horizontal ? {} : { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { precision: 0 } },
+          x: horizontal ? { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { precision: 0 } } : { grid: { display: false } }
+        } : {}
       }
     });
   }
@@ -318,18 +332,7 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
         '<option value="">Seleccione una actividad...</option>' + opcionesActividadesGestion;
     }
     actualizarActividadAsistenciaSeleccionada();
-  
-  // Poblar selectores de nuevos modulos (Certificados y Asistencia QR)
-  const certSelect = document.getElementById('certActividadSelect');
-  const qrSelect = document.getElementById('qrActividadSelect');
-  if (certSelect || qrSelect) {
-    const opcionesActividades = actividades.map(function(a) {
-      return '<option value="' + a.ID_ACTIVIDAD + '">' + (a.NOMBRE_ACTIVIDAD || a.ID_ACTIVIDAD) + '</option>';
-    }).join('');
-    if (certSelect) certSelect.innerHTML = '<option value="">Seleccione una actividad...</option>' + opcionesActividades;
-    if (qrSelect) qrSelect.innerHTML = '<option value="">Seleccione una actividad...</option>' + opcionesActividades;
   }
-}
   function esActividadArchivada_(actividad) {
     return normalizar(actividad?.ESTADO_ACTIVIDAD) === 'archivada';
   }
@@ -837,7 +840,13 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
         mostrarCarga(false);
         notificar(respuesta.mensaje);
         cerrarEdicionActividad();
-        cargarDatos();
+        if (respuesta.actividad) {
+          const idx = DB.actividades.findIndex(a => a.ID_ACTIVIDAD === respuesta.id);
+          if (idx >= 0) DB.actividades[idx] = Object.assign({}, DB.actividades[idx], respuesta.actividad);
+          renderActividades();
+          llenarSelectores();
+        }
+        cargarDatos(true);
       })
       .withFailureHandler(error => {
         mostrarCarga(false);
@@ -972,7 +981,14 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
         mostrarCarga(false);
         notificar(respuesta.mensaje);
         cerrarEdicionPersona();
-        cargarDatos();
+        if (respuesta.persona) {
+          const idx = DB.personas.findIndex(p => p.ID_PERSONA === respuesta.id);
+          if (idx >= 0) DB.personas[idx] = Object.assign({}, DB.personas[idx], respuesta.persona);
+          else DB.personas.unshift(respuesta.persona);
+          renderPersonas();
+          llenarSelectores();
+        }
+        cargarDatos(true);
       })
       .withFailureHandler(error => {
         mostrarCarga(false);
@@ -1017,9 +1033,31 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
           actualizarDocumentoPersona();
           actualizarEdadPersona();
           actualizarAreasPersonaInteres();
+          if (r.persona) {
+            const idx = DB.personas.findIndex(p => p.ID_PERSONA === r.id);
+            if (idx >= 0) DB.personas[idx] = Object.assign({}, DB.personas[idx], r.persona);
+            else DB.personas.unshift(r.persona);
+            renderPersonas();
+            llenarSelectores();
+          }
         }
-        if (form.id === 'formActividad') actualizarAreasActividad();
-        cargarDatos();
+        if (form.id === 'formActividad') {
+          actualizarAreasActividad();
+          if (r.actividad) {
+            const idx = DB.actividades.findIndex(a => a.ID_ACTIVIDAD === r.id);
+            if (idx >= 0) DB.actividades[idx] = Object.assign({}, DB.actividades[idx], r.actividad);
+            else DB.actividades.unshift(r.actividad);
+            renderActividades();
+            llenarSelectores();
+          }
+        }
+        if (form.id === 'formParticipacion') {
+          if (r.participacion) {
+            DB.participaciones.unshift(r.participacion);
+            renderParticipaciones();
+          }
+        }
+        cargarDatos(true);
       })
       .withFailureHandler(error => {
         mostrarCarga(false);

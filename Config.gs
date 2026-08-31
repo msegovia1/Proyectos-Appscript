@@ -1,10 +1,10 @@
 /**
  * CONFIGURACIÓN CENTRAL SIGC
- * Versión 3.7.0
+ * Versión 3.8.0
  * Soporta configuración dinámica mediante PropertiesService y respaldo estático.
  */
 const SIGC_CONFIG_DEFAULT = Object.freeze({
-  VERSION: '3.7.0',
+  VERSION: '3.8.0',
   SPREADSHEET_ID: '1gT0135EeC1MTzLSfcfJOHuJl5yODFyDtL7eXRfTRmuo',
   ZONA_HORARIA: 'America/Santiago',
   LIMITE_RECUPERACION_FORMULARIO: 100,
@@ -27,9 +27,7 @@ const SIGC_CONFIG_DEFAULT = Object.freeze({
     HISTORIAL_IMPORTACIONES: 'HISTORIAL_IMPORTACIONES',
     HISTORICO_ORIGINAL: 'HISTORICO_ORIGINAL',
     LOG: 'LOG_CAMBIOS',
-    AUDITORIA: 'AUDITORIA_MIGRACION',
-    CERTIFICADOS: 'CONFIG_CERTIFICADOS',
-    SESIONES_QR: 'SESIONES_QR'
+    AUDITORIA: 'AUDITORIA_MIGRACION'
   })
 });
 

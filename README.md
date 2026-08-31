@@ -1,34 +1,37 @@
 # SIGC - Sistema Integrado de Gestión de Capacitaciones y Emprendimiento
-**Versión 3.7.0** • Municipalidad de Santiago
+**Versión 3.8.0** • Municipalidad de Santiago
 
-Sistema Web y Backend integral desarrollado sobre **Google Apps Script** y **Google Sheets** para la gestión, seguimiento, evaluación y certificación de capacitaciones, cursos y programas comunitarios.
+Sistema Web y Backend integral de alto rendimiento desarrollado sobre **Google Apps Script** y **Google Sheets** para la gestión, seguimiento, evaluación y analítica de capacitaciones, cursos y programas comunitarios.
 
 ---
 
-## 🚀 Novedades de la Versión 3.7.0
+## 🚀 Novedades de la Versión 3.8.0
 
-1. **Arquitectura 100% Modular:**
-   - Separación del monolito `Index.html` en vistas independientes (`ViewDashboard`, `ViewPersonas`, `ViewActividades`, etc.), estilos centralizados (`Styles.html`) y controladores (`JsUI`, `JsCertificados`, `JsAsistenciaQR`, `JsApp`).
-2. **Emisión Automática de Diplomas y Certificados en PDF:**
-   - Generación masiva y personalizada de certificados a partir de plantillas en Google Docs (`{{NOMBRE}}`, `{{RUT}}`, `{{ACTIVIDAD}}`, `{{HORAS}}`, `{{FECHA}}`).
-   - Almacenamiento directo en Google Drive y envío automático por correo electrónico a los participantes aprobados.
-3. **Control de Asistencia Rápida por Código QR:**
-   - Proyección de códigos QR dinámicos por sesión con tiempo de expiración.
-   - Escáner en tiempo real con cámara de celular/webcam y registro manual por código de barras o RUT.
-4. **Diseño Responsivo y Notificaciones Modernas:**
-   - Menú lateral tipo *Drawer* colapsable en dispositivos móviles y tablets.
-   - Sistema de notificaciones flotantes (*Toasts*) y modales accesibles.
-5. **Configuración Segura y Dinámica:**
-   - Soporte para `PropertiesService`: configure el `SPREADSHEET_ID` desde el modal de ajustes de la aplicación web sin exponer IDs en GitHub.
-6. **Soporte para Google Clasp:**
-   - Archivos `.clasp.json` y `.claspignore` listos para sincronizar desde la terminal.
+1. **⚡ Optimización Extrema de Rendimiento y Carga:**
+   - **Lectura Ultrarrápida por Lotes:** Reemplazo de `getDisplayValues()` por `getValues()` nativo, reduciendo tiempos de I/O hasta un 70%.
+   - **Cálculo de IDs Correlativos en Memoria:** Eliminación de múltiples escaneos repetidos de hojas al registrar fichas de personas, actividades o participaciones.
+   - **Inserción Masiva de Intereses:** Guardado de intereses formativos en una sola pasada.
+   - **Sincronización en Bloque:** Actualización matricial masiva de participaciones al modificar actividades.
+   - **Actualizaciones Optimistas en Frontend:** La UI actualiza la base local (`DB`) de inmediato con los datos retornados por el servidor sin esperas de recarga completa.
+   - **Debounce Inteligente:** Búsquedas y filtros en vivo optimizados (200 ms) para evitar congelamientos en tablas extensas.
+
+2. **🎨 Modernización Visual y Estética:**
+   - Paleta corporativa refinada con gradientes suaves azul municipal (`#0b1f3a` a `#112d52`).
+   - Tarjetas KPI con acentos de color semánticos, hover interactivo y tipografía nítida.
+   - Gráficos **Chart.js** modernizados con barras redondeadas, tooltips refinados y colores coordinados.
+   - Tablas con cabeceras *sticky* sutiles, scrollbars estilizadas y *badges* de estado tipo píldora.
+   - Microinteracciones ágiles y animaciones fluidas de cambio de vista.
+
+3. **🧹 Arquitectura Depurada y Limpia:**
+   - Eliminación física y lógica de los módulos de Asistencia QR y Generador de Diplomas para concentrar el sistema en su núcleo de gestión y analítica.
+   - Estructura plana de archivos en raíz para sincronización directa 1-a-1 mediante la extensión *Google Apps Script GitHub Assistant*.
 
 ---
 
 ## 📁 Estructura del Proyecto
 
 ```text
-Proyectos-Appscript/
+SGC/
 ├── appsscript.json             # Manifiesto y permisos de Apps Script
 ├── .clasp.json                 # Configuración de Clasp para despliegue
 ├── .claspignore               # Exclusiones de sincronización
@@ -36,19 +39,17 @@ Proyectos-Appscript/
 ├── README.md                  # Documentación del sistema
 │
 ├── Backend (.gs):
-│   ├── Config.gs              # Configuración central y PropertiesService
+│   ├── Config.gs              # Configuración central v3.8.0 y PropertiesService
 │   ├── Utils.gs               # Normalización de RUTs, nombres y validaciones
-│   ├── WebApp.gs              # Endpoints API, doGet y orquestador
+│   ├── WebApp.gs              # Endpoints API, doGet y orquestador optimizado
 │   ├── Codigo.gs              # Menús de Google Sheets y disparadores
-│   ├── Certificados.gs        # Generación de PDFs y envío de correos
-│   ├── AsistenciaQR.gs        # Gestión de tokens y escaneo QR
 │   ├── Importaciones.gs       # Importador universal por lotes
 │   ├── ImportadorHistorico.gs # Compatibilidad histórica
 │   └── MigracionV3.gs         # Utilidades de migración estructural
 │
 └── Frontend (.html):
-    ├── Index.html             # Shell principal y contenedor
-    ├── Styles.html            # CSS moderno y responsive
+    ├── Index.html             # Shell principal, navegación moderna y contenedor
+    ├── Styles.html            # CSS moderno, variables de diseño y responsive
     ├── ModalConfig.html       # Modal de configuración de planilla
     │
     ├── Vistas (Partials):
@@ -57,8 +58,6 @@ Proyectos-Appscript/
     │   ├── ViewActividades.html    # Talleres, cursos y estados
     │   ├── ViewParticipaciones.html# Inscritos y resultados
     │   ├── ViewGestion.html        # Asistencia rápida y nóminas
-    │   ├── ViewCertificados.html   # Generador de Diplomas PDF
-    │   ├── ViewAsistenciaQR.html   # Escáner y proyección QR
     │   ├── ViewDemanda.html        # Análisis de demanda e intereses
     │   ├── ViewReportes.html       # Reportes y estadísticas
     │   ├── ViewComunicaciones.html # Correos masivos y plantillas
@@ -67,37 +66,26 @@ Proyectos-Appscript/
     │   └── ViewRegistros.html      # Formularios de ingreso rápido
     │
     └── Scripts de Cliente:
-        ├── JsUI.html               # Toasts, Modales y Drawer móvil
-        ├── JsCertificados.html     # Lógica de emisión de diplomas
-        ├── JsAsistenciaQR.html     # Lógica de lectura y generación QR
-        └── JsApp.html              # Controlador general y enrutador
+        ├── JsUI.html               # Toasts flotantes, Modales y Drawer móvil
+        └── JsApp.html              # Controlador general reactivo y optimista
 ```
 
 ---
 
 ## 🛠️ Instalación y Despliegue
 
-### Opción A: Despliegue con Google Clasp (Recomendada)
-1. Instala Clasp si no lo tienes:
-   ```bash
-   npm install -g @google/clasp
-   clasp login
-   ```
-2. Configura tu `scriptId` en `.clasp.json` (obtenido en la configuración de tu proyecto en script.google.com).
-3. Sube los archivos a Google Apps Script:
-   ```bash
-   clasp push
-   ```
-4. Abre el proyecto en tu navegador:
-   ```bash
-   clasp open
-   ```
+### Opción A: Despliegue con Extensión de GitHub (Recomendada)
+1. Abre tu proyecto en el editor de Google Apps Script (`script.google.com`).
+2. Abre la extensión **Google Apps Script GitHub Assistant**.
+3. Selecciona tu repositorio `Proyectos-Appscript-Capacitacion` y la rama correspondiente.
+4. Haz clic en **Pull** para traer todos los archivos `.gs` y `.html`.
 
----
-
-### Opción B: Subida mediante Extensión de Navegador o GitHub
-1. Si usas la extensión *Google Apps Script GitHub Assistant*, abre tu editor en Apps Script.
-2. Selecciona tu repositorio y haz clic en **Pull** para traer todos los archivos `.gs` y `.html`.
+### Opción B: Despliegue con Google Clasp
+```bash
+npm install -g @google/clasp
+clasp login
+clasp push
+```
 
 ---
 

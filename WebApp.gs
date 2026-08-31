@@ -1,6 +1,6 @@
 /**
- * WEB APP SIGC 3.7.0
- * Backend modular optimizado con soporte para plantillas y nuevos módulos.
+ * WEB APP SIGC 3.8.0
+ * Backend modular de alto rendimiento para gestión de capacitaciones.
  */
 function doGet(e) {
   try {
@@ -10,7 +10,7 @@ function doGet(e) {
   }
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
-    .setTitle('Sistema de Gestión de Capacitaciones')
+    .setTitle('Sistema de Gestión de Capacitaciones — SIGC')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
@@ -714,23 +714,26 @@ function guardarPersona(datos) {
         idExistente,
         'Ficha completada desde la aplicación web.'
       );
+      const personaActualizada = Object.assign({}, existente.datos, cambios, { ID_PERSONA: idExistente });
       return {
         ok: true,
         mensaje: 'La persona ya existía y su ficha fue actualizada sin borrar datos anteriores.' +
           (interesesGuardados ? ' Se registraron ' + interesesGuardados + ' interés(es) de capacitación.' : ''),
-        id: idExistente
+        id: idExistente,
+        persona: webNormalizarPersonaSalida_(personaActualizada)
       };
     }
-    const id = webSiguienteId_(
-      hoja,
+    const id = webCalcularSiguienteIdDesdeFilas_(
+      tabla.filas,
       'ID_PERSONA',
       'PER-',
       6
     );
-    webAgregarFilaPorEncabezados_(hoja, tabla.encabezados, Object.assign({
+    const personaNueva = Object.assign({
       ID_PERSONA: id,
       FECHA_PRIMER_REGISTRO: ahora
-    }, cambios));
+    }, cambios);
+    webAgregarFilaPorEncabezados_(hoja, tabla.encabezados, personaNueva);
     const interesesGuardados = webGuardarInteresesDesdePersona_(ss, id, datos);
     sigcRegistrarLog(
       'CREAR',
@@ -742,14 +745,15 @@ function guardarPersona(datos) {
       ok: true,
       mensaje: 'La persona fue registrada.' +
         (interesesGuardados ? ' Se registraron ' + interesesGuardados + ' interés(es) de capacitación.' : ''),
-      id: id
+      id: id,
+      persona: webNormalizarPersonaSalida_(personaNueva)
     };
   } finally {
     lock.releaseLock();
   }
 }
 
-/** Guarda intereses incluidos en el alta de una persona, sin duplicar área activa. */
+/** Guarda intereses incluidos en el alta de una persona de forma masiva y optimizada. */
 function webGuardarInteresesDesdePersona_(ss, idPersona, datos) {
   let intereses = datos && datos.INTERESES;
   if (!Array.isArray(intereses)) {
@@ -760,9 +764,18 @@ function webGuardarInteresesDesdePersona_(ss, idPersona, datos) {
   }
   if (!Array.isArray(intereses) || !intereses.length) return 0;
   const hoja = webAsegurarHojaIntereses_(ss);
-  let tabla = webLeerTablaConFilas_(hoja);
+  const tabla = webLeerTablaConFilas_(hoja);
   const ahora = new Date();
   let guardados = 0;
+  let maxIdNum = (tabla.filas || []).reduce(function(acc, fila) {
+    const txt = String(fila.datos.ID_INTERES || '');
+    if (txt.startsWith('INT-')) {
+      const n = parseInt(txt.substring(4), 10);
+      return !isNaN(n) && n > acc ? n : acc;
+    }
+    return acc;
+  }, 0);
+
   intereses.forEach(function(interes) {
     const linea = sigcNormalizarTexto(interes && interes.ESCUELA_LINEA);
     const area = sigcNormalizarTexto(interes && interes.AREA_TEMATICA);
@@ -780,8 +793,9 @@ function webGuardarInteresesDesdePersona_(ss, idPersona, datos) {
       guardados++;
       return;
     }
-    const id = webSiguienteId_(hoja, 'ID_INTERES', 'INT-', 6);
-    webAgregarFilaPorEncabezados_(hoja, tabla.encabezados, {
+    maxIdNum++;
+    const id = 'INT-' + String(maxIdNum).padStart(6, '0');
+    const nuevoRegistro = {
       ID_INTERES: id,
       ID_PERSONA: idPersona,
       ESCUELA_LINEA: linea,
@@ -791,15 +805,16 @@ function webGuardarInteresesDesdePersona_(ss, idPersona, datos) {
       ESTADO_INTERES: 'Activo',
       ULTIMA_ACTUALIZACION: ahora,
       OBSERVACIONES: ''
-    });
+    };
+    webAgregarFilaPorEncabezados_(hoja, tabla.encabezados, nuevoRegistro);
+    tabla.filas.push({ numeroFila: tabla.filas.length + 2, datos: nuevoRegistro });
     guardados++;
-    tabla = webLeerTablaConFilas_(hoja);
   });
   return guardados;
 }
+
 /**
- * Actualiza una persona existente por ID_PERSONA.
- * A diferencia de guardarPersona(), permite corregir o vaciar campos.
+ * Actualiza una persona existente por ID_PERSONA con alta velocidad.
  */
 function actualizarPersona(datos) {
   datos = datos || {};
@@ -844,7 +859,7 @@ function actualizarPersona(datos) {
       throw new Error('El documento ingresado ya pertenece a otra persona: ' + duplicada.datos.ID_PERSONA);
     }
     const ahora = new Date();
-    webActualizarFilaPorEncabezados_(hoja, tabla.encabezados, existente.numeroFila, {
+    const cambios = {
       RUT: documento.tipo === 'RUT' ? documento.numero : '',
       TIPO_DOCUMENTO: documento.tipo,
       NUMERO_DOCUMENTO: documento.numero,
@@ -862,10 +877,17 @@ function actualizarPersona(datos) {
       ESTADO_CONTACTO: correo || telefono ? 'Activo' : 'Sin contacto',
       ULTIMA_ACTUALIZACION: ahora,
       OBSERVACIONES: sigcNormalizarTexto(datos.OBSERVACIONES)
-    });
+    };
+    webActualizarFilaPorEncabezados_(hoja, tabla.encabezados, existente.numeroFila, cambios);
     SpreadsheetApp.flush();
     sigcRegistrarLog('ACTUALIZAR', 'PERSONA', idPersona, 'Ficha editada desde la aplicación web.');
-    return {ok: true, id: idPersona, mensaje: 'La ficha de la persona fue actualizada correctamente.'};
+    const personaActualizada = Object.assign({}, existente.datos, cambios, { ID_PERSONA: idPersona });
+    return {
+      ok: true,
+      id: idPersona,
+      mensaje: 'La ficha de la persona fue actualizada correctamente.',
+      persona: webNormalizarPersonaSalida_(personaActualizada)
+    };
   } finally {
     lock.releaseLock();
   }
@@ -884,13 +906,18 @@ function guardarActividad(datos) {
     if (!hoja) throw new Error('No se encontró la hoja ACTIVIDADES.');
     const tabla = webLeerTablaConFilas_(hoja);
     const anio = String(datos.ANO || new Date().getFullYear());
-    const id = webSiguienteIdActividad_(hoja, anio);
+    const id = webCalcularSiguienteIdDesdeFilas_(
+      tabla.filas,
+      'ID_ACTIVIDAD',
+      'CAP-' + anio + '-',
+      3
+    );
     const regla = sigcNormalizarEncabezado(
       datos.REGLA_RESULTADO || 'Asistencia'
     ) === 'PORCENTAJE'
       ? 'Porcentaje'
       : 'Asistencia';
-    webAgregarFilaPorEncabezados_(hoja, tabla.encabezados, {
+    const nuevaActividad = {
       ID_ACTIVIDAD: id,
       NOMBRE_ACTIVIDAD: sigcNormalizarTexto(datos.NOMBRE_ACTIVIDAD),
       TIPO_ACTIVIDAD: sigcNormalizarTexto(datos.TIPO_ACTIVIDAD),
@@ -918,7 +945,8 @@ function guardarActividad(datos) {
       ESTADO_ACTIVIDAD: sigcNormalizarTexto(datos.ESTADO_ACTIVIDAD) || 'Planificada',
       CARPETA_DRIVE: sigcNormalizarTexto(datos.CARPETA_DRIVE),
       OBSERVACIONES: sigcNormalizarTexto(datos.OBSERVACIONES)
-    });
+    };
+    webAgregarFilaPorEncabezados_(hoja, tabla.encabezados, nuevaActividad);
     sigcRegistrarLog(
       'CREAR',
       'ACTIVIDAD',
@@ -928,15 +956,16 @@ function guardarActividad(datos) {
     return {
       ok: true,
       mensaje: 'La actividad fue registrada.',
-      id: id
+      id: id,
+      actividad: nuevaActividad
     };
   } finally {
     lock.releaseLock();
   }
 }
+
 /**
- * Actualiza una actividad existente y sincroniza sus participaciones.
- * El ID_ACTIVIDAD es permanente y solo se utiliza para localizar la fila.
+ * Actualiza una actividad existente y sincroniza sus participaciones en bloque.
  */
 function actualizarActividad(datos) {
   datos = datos || {};
@@ -954,38 +983,32 @@ function actualizarActividad(datos) {
     const hojaParticipaciones = ss.getSheetByName(
       WEBAPP_CONFIG.HOJAS.PARTICIPACIONES
     );
-    if (!hojaActividades) {
-      throw new Error('No se encontró la hoja ACTIVIDADES.');
-    }
-    if (!hojaParticipaciones) {
-      throw new Error('No se encontró la hoja PARTICIPACIONES.');
-    }
+    if (!hojaActividades) throw new Error('No se encontró la hoja ACTIVIDADES.');
+    if (!hojaParticipaciones) throw new Error('No se encontró la hoja PARTICIPACIONES.');
+
     const tablaActividades = webLeerTablaConFilas_(hojaActividades);
     const idActividad = String(datos.ID_ACTIVIDAD || '').trim();
     const filaActividad = tablaActividades.filas.find(function(fila) {
       return String(fila.datos.ID_ACTIVIDAD || '').trim() === idActividad;
     });
-    if (!filaActividad) {
-      throw new Error('No se encontró la actividad: ' + idActividad);
-    }
+    if (!filaActividad) throw new Error('No se encontró la actividad: ' + idActividad);
+
     const anio = Math.trunc(
       webNumeroNoNegativo_(
         datos.ANO,
         filaActividad.datos.ANO || new Date().getFullYear()
       )
     );
-    if (anio < 2000 || anio > 2100) {
-      throw new Error('El año debe estar entre 2000 y 2100.');
-    }
+    if (anio < 2000 || anio > 2100) throw new Error('El año debe estar entre 2000 y 2100.');
+
     const sesionesTotales = Math.trunc(
       webNumeroNoNegativo_(
         datos.SESIONES_TOTALES,
         filaActividad.datos.SESIONES_TOTALES || 1
       )
     );
-    if (sesionesTotales < 1) {
-      throw new Error('Las sesiones totales deben ser al menos 1.');
-    }
+    if (sesionesTotales < 1) throw new Error('Las sesiones totales deben ser al menos 1.');
+
     const cupos = String(datos.CUPOS ?? '').trim() === ''
       ? ''
       : Math.trunc(webNumeroNoNegativo_(datos.CUPOS, 0));
@@ -1004,24 +1027,15 @@ function actualizarActividad(datos) {
           : datos.PORCENTAJE_APROBACION
       );
       if (porcentajeAprobacion <= 0 || porcentajeAprobacion > 1) {
-        throw new Error(
-          'El porcentaje de aprobación debe ser mayor que 0 y menor o igual a 100.'
-        );
+        throw new Error('El porcentaje de aprobación debe ser mayor que 0 y menor o igual a 100.');
       }
     }
     const estadosPermitidos = [
-      'Planificada',
-      'Difusión',
-      'Inscripción abierta',
-      'En ejecución',
-      'Ejecutada',
-      'Suspendida',
-      'Cerrada',
-      'Archivada'
+      'Planificada', 'Difusión', 'Inscripción abierta', 'En ejecución',
+      'Ejecutada', 'Suspendida', 'Cerrada', 'Archivada'
     ];
     const estado = sigcNormalizarTexto(
-      datos.ESTADO_ACTIVIDAD ||
-      filaActividad.datos.ESTADO_ACTIVIDAD
+      datos.ESTADO_ACTIVIDAD || filaActividad.datos.ESTADO_ACTIVIDAD
     );
     if (estadosPermitidos.indexOf(estado) < 0) {
       throw new Error('El estado de la actividad no es válido.');
@@ -1031,26 +1045,19 @@ function actualizarActividad(datos) {
     const numeroInicio = webFechaNumero_(fechaInicio);
     const numeroTermino = webFechaNumero_(fechaTermino);
     if (numeroInicio && numeroTermino && numeroTermino < numeroInicio) {
-      throw new Error(
-        'La fecha de término no puede ser anterior a la fecha de inicio.'
-      );
+      throw new Error('La fecha de término no puede ser anterior a la fecha de inicio.');
     }
-    const tablaParticipaciones = webLeerTablaConFilas_(
-      hojaParticipaciones
-    );
+
+    const tablaParticipaciones = webLeerTablaConFilas_(hojaParticipaciones);
     const participacionesActividad = tablaParticipaciones.filas.filter(
       function(fila) {
-        return String(fila.datos.ID_ACTIVIDAD || '').trim() ===
-            idActividad &&
+        return String(fila.datos.ID_ACTIVIDAD || '').trim() === idActividad &&
           webEsRegistroActivo_(fila.datos);
       }
     );
     const conAsistenciaIncompatible = participacionesActividad.find(
       function(fila) {
-        return webNumeroNoNegativo_(
-          fila.datos.SESIONES_ASISTIDAS,
-          0
-        ) > sesionesTotales;
+        return webNumeroNoNegativo_(fila.datos.SESIONES_ASISTIDAS, 0) > sesionesTotales;
       }
     );
     if (conAsistenciaIncompatible) {
@@ -1077,14 +1084,9 @@ function actualizarActividad(datos) {
       PORCENTAJE_APROBACION: porcentajeAprobacion,
       REGLA_RESULTADO: regla,
       CUPOS: cupos,
-      REQUIERE_SELECCION: sigcNormalizarSiNo(
-        datos.REQUIERE_SELECCION,
-        'No'
-      ),
+      REQUIERE_SELECCION: sigcNormalizarSiNo(datos.REQUIERE_SELECCION, 'No'),
       MODALIDAD: sigcNormalizarTexto(datos.MODALIDAD) || 'Presencial',
-      INSTITUCION_ASOCIADA: sigcNormalizarTexto(
-        datos.INSTITUCION_ASOCIADA
-      ),
+      INSTITUCION_ASOCIADA: sigcNormalizarTexto(datos.INSTITUCION_ASOCIADA),
       RESPONSABLE: sigcNormalizarTexto(datos.RESPONSABLE),
       ESTADO_ACTIVIDAD: estado,
       CARPETA_DRIVE: String(datos.CARPETA_DRIVE || '').trim(),
@@ -1106,79 +1108,64 @@ function actualizarActividad(datos) {
     const finalizada = sigcActividadFinalizada(actividadActualizada);
     let sincronizadas = 0;
     let resultadosRecalculados = 0;
+
+    // Sincronización masiva en matriz
+    const mapaP = {};
+    tablaParticipaciones.encabezados.forEach(function(enc, idx) {
+      mapaP[sigcNormalizarEncabezado(enc)] = idx;
+    });
+
+    const rangoP = hojaParticipaciones.getDataRange();
+    const matrizP = rangoP.getValues();
+
     participacionesActividad.forEach(function(fila) {
-      const asistidas = webNumeroNoNegativo_(
-        fila.datos.SESIONES_ASISTIDAS,
-        0
-      );
+      const asistidas = webNumeroNoNegativo_(fila.datos.SESIONES_ASISTIDAS, 0);
       const porcentajeAsistencia = asistidas / sesionesTotales;
-      const cambiosParticipacion = {
-        SESIONES_TOTALES: sesionesTotales,
-        PORCENTAJE_ASISTENCIA: porcentajeAsistencia,
-        ULTIMA_ACTUALIZACION: ahora
-      };
+      const idxMatriz = fila.numeroFila - 1;
+      if (idxMatriz < 1 || idxMatriz >= matrizP.length) return;
+
+      if (mapaP['SESIONES_TOTALES'] !== undefined) matrizP[idxMatriz][mapaP['SESIONES_TOTALES']] = sesionesTotales;
+      if (mapaP['PORCENTAJE_ASISTENCIA'] !== undefined) matrizP[idxMatriz][mapaP['PORCENTAJE_ASISTENCIA']] = porcentajeAsistencia;
+      if (mapaP['ULTIMA_ACTUALIZACION'] !== undefined) matrizP[idxMatriz][mapaP['ULTIMA_ACTUALIZACION']] = ahora;
+
       if (finalizada) {
         const seleccionada = sigcEsSeleccionado(fila.datos);
         const resultado = seleccionada
-          ? sigcCalcularResultado(
-              actividadActualizada,
-              asistidas,
-              sesionesTotales,
-              true
-            )
-          : {
-              resultadoAsistencia: 'Pendiente',
-              resultadoFinal: 'Pendiente'
-            };
-        cambiosParticipacion.RESULTADO_ASISTENCIA =
-          resultado.resultadoAsistencia;
-        cambiosParticipacion.RESULTADO_FINAL =
-          resultado.resultadoFinal;
+          ? sigcCalcularResultado(actividadActualizada, asistidas, sesionesTotales, true)
+          : { resultadoAsistencia: 'Pendiente', resultadoFinal: 'Pendiente' };
+        if (mapaP['RESULTADO_ASISTENCIA'] !== undefined) matrizP[idxMatriz][mapaP['RESULTADO_ASISTENCIA']] = resultado.resultadoAsistencia;
+        if (mapaP['RESULTADO_FINAL'] !== undefined) matrizP[idxMatriz][mapaP['RESULTADO_FINAL']] = resultado.resultadoFinal;
         if (seleccionada) resultadosRecalculados++;
       }
-      webActualizarFilaPorEncabezados_(
-        hojaParticipaciones,
-        tablaParticipaciones.encabezados,
-        fila.numeroFila,
-        cambiosParticipacion
-      );
       sincronizadas++;
     });
+
+    if (sincronizadas > 0) {
+      rangoP.setValues(matrizP);
+    }
     SpreadsheetApp.flush();
     sigcRegistrarLog(
       'ACTUALIZAR',
       'ACTIVIDAD',
       idActividad,
-      'Estado: ' +
-        String(
-          filaActividad.datos.ESTADO_ACTIVIDAD ||
-          'Sin estado'
-        ) +
-        ' → ' +
-        estado +
-        '. Participaciones sincronizadas: ' +
-        sincronizadas +
-        '. Resultados recalculados: ' +
-        resultadosRecalculados +
-        '.'
+      'Estado: ' + String(filaActividad.datos.ESTADO_ACTIVIDAD || 'Sin estado') +
+        ' → ' + estado + '. Participaciones sincronizadas: ' + sincronizadas +
+        '. Resultados recalculados: ' + resultadosRecalculados + '.'
     );
     return {
       ok: true,
       id: idActividad,
+      actividad: actividadActualizada,
       participacionesSincronizadas: sincronizadas,
       resultadosRecalculados: resultadosRecalculados,
       mensaje: 'La actividad fue actualizada. ' +
-        (sincronizadas
-          ? 'Se sincronizaron ' +
-            sincronizadas +
-            ' participaciones. '
-          : 'No tenía participaciones asociadas. ') +
-        (finalizada
-          ? 'Se recalcularon ' +
-            resultadosRecalculados +
-            ' resultados de personas seleccionadas.'
-          : 'No se recalcularon resultados porque la actividad aún no está Ejecutada o Cerrada.')
+        (sincronizadas ? 'Se sincronizaron ' + sincronizadas + ' participaciones. ' : 'No tenía participaciones asociadas. ') +
+        (finalizada ? 'Se recalcularon ' + resultadosRecalculados + ' resultados de seleccionados.' : '')
     };
+  } finally {
+    lock.releaseLock();
+  }
+}
   } finally {
     lock.releaseLock();
   }
@@ -1351,14 +1338,15 @@ function guardarParticipacion(datos) {
     const resultado = seleccion === 'Seleccionado'
       ? sigcCalcularResultado(actividad, asistidas, total, finalizar)
       : {resultadoAsistencia: 'Pendiente', resultadoFinal: 'Pendiente'};
-    const id = webSiguienteId_(
-      hoja,
+    const prefijoId = 'PAR-' + new Date().getFullYear() + '-';
+    const id = webCalcularSiguienteIdDesdeFilas_(
+      tabla.filas,
       'ID_PARTICIPACION',
-      'PAR-' + new Date().getFullYear() + '-',
+      prefijoId,
       6
     );
     const ahora = new Date();
-    webAgregarFilaPorEncabezados_(hoja, tabla.encabezados, {
+    const nuevaParticipacion = {
       ID_PARTICIPACION: id,
       ID_PERSONA: datos.ID_PERSONA,
       ID_ACTIVIDAD: datos.ID_ACTIVIDAD,
@@ -1384,17 +1372,29 @@ function guardarParticipacion(datos) {
       FILA_ORIGEN: '',
       REGISTRO_ACTIVO: 'Sí',
       ULTIMA_ACTUALIZACION: ahora
-    });
+    };
+    webAgregarFilaPorEncabezados_(hoja, tabla.encabezados, nuevaParticipacion);
     sigcRegistrarLog(
       'CREAR',
       'PARTICIPACION',
       id,
       datos.ID_PERSONA + ' | ' + datos.ID_ACTIVIDAD
     );
+    const participacionEnriquecida = Object.assign({}, nuevaParticipacion, {
+      NOMBRE_COMPLETO: persona.NOMBRE_COMPLETO || '',
+      RUT: persona.RUT || '',
+      DOCUMENTO: persona.NUMERO_DOCUMENTO || persona.RUT || '',
+      NOMBRE_ACTIVIDAD: actividad.NOMBRE_ACTIVIDAD || '',
+      PROGRAMA: actividad.PROGRAMA || '',
+      AREA_TEMATICA: actividad.AREA_TEMATICA || '',
+      REGLA_RESULTADO: actividad.REGLA_RESULTADO || '',
+      ESTADO_ACTIVIDAD: actividad.ESTADO_ACTIVIDAD || ''
+    });
     return {
       ok: true,
       mensaje: 'La participación fue registrada.',
-      id: id
+      id: id,
+      participacion: participacionEnriquecida
     };
   } finally {
     lock.releaseLock();
@@ -1804,34 +1804,53 @@ function webConstruirAnalisisDemanda_(personas, intereses, actividades, particip
   };
 }
 
+function webCeldaAString_(valor) {
+  if (valor === null || valor === undefined) return '';
+  if (valor instanceof Date) {
+    if (isNaN(valor.getTime())) return '';
+    const anio = valor.getFullYear();
+    const mes = String(valor.getMonth() + 1).padStart(2, '0');
+    const dia = String(valor.getDate()).padStart(2, '0');
+    const horas = valor.getHours();
+    const minutos = valor.getMinutes();
+    const segundos = valor.getSeconds();
+    if (horas !== 0 || minutos !== 0 || segundos !== 0) {
+      return `${anio}-${mes}-${dia} ${String(horas).padStart(2, '0')}:${String(minutos).padStart(2, '0')}:${String(segundos).padStart(2, '0')}`;
+    }
+    return `${anio}-${mes}-${dia}`;
+  }
+  return String(valor).trim();
+}
+
 function webLeerTabla_(ss, nombreHoja) {
   const hoja = ss.getSheetByName(nombreHoja);
   if (!hoja) throw new Error('No se encontró la hoja: ' + nombreHoja);
-  const valores = hoja.getDataRange().getDisplayValues();
+  const valores = hoja.getDataRange().getValues();
   if (valores.length < 2) return [];
   const encabezados = valores[0].map(function(valor) {
-    return String(valor).trim();
+    return String(valor || '').trim();
   });
   return valores.slice(1)
     .filter(function(fila) {
       return fila.some(function(celda) {
-        return String(celda).trim() !== '';
+        return celda !== null && celda !== undefined && String(celda).trim() !== '';
       });
     })
     .map(function(fila) {
-      return webObjetoDesdeFila_(encabezados, fila);
+      return webObjetoDesdeFilaRapida_(encabezados, fila);
     });
 }
+
 function webLeerTablaConFilas_(hoja) {
-  const valores = hoja.getDataRange().getDisplayValues();
-  const encabezados = valores[0].map(function(valor) {
-    return String(valor).trim();
-  });
+  const valores = hoja.getDataRange().getValues();
+  const encabezados = valores.length ? valores[0].map(function(valor) {
+    return String(valor || '').trim();
+  }) : [];
   const filas = valores.slice(1)
     .map(function(fila, indice) {
       return {
         numeroFila: indice + 2,
-        datos: webObjetoDesdeFila_(encabezados, fila)
+        datos: webObjetoDesdeFilaRapida_(encabezados, fila)
       };
     })
     .filter(function(fila) {
@@ -1843,6 +1862,17 @@ function webLeerTablaConFilas_(hoja) {
     encabezados: encabezados,
     filas: filas
   };
+}
+
+function webObjetoDesdeFilaRapida_(encabezados, fila) {
+  const objeto = {};
+  for (let i = 0; i < encabezados.length; i++) {
+    const enc = encabezados[i];
+    if (enc) {
+      objeto[enc] = webCeldaAString_(fila[i]);
+    }
+  }
+  return objeto;
 }
 function webObjetoDesdeFila_(encabezados, fila) {
   return encabezados.reduce(function(objeto, encabezado, indice) {
@@ -2216,17 +2246,23 @@ function webBuscarRegistro_(ss, nombreHoja, campo, valor) {
     return String(registro[campo]) === String(valor);
   }) || null;
 }
-function webSiguienteId_(hoja, campo, prefijo, largo) {
-  const tabla = webLeerTablaConFilas_(hoja);
-  const numeros = tabla.filas.map(function(fila) {
-    const texto = String(fila.datos[campo] || '');
+function webCalcularSiguienteIdDesdeFilas_(filas, campo, prefijo, largo) {
+  const numeros = (filas || []).map(function(item) {
+    const datos = item && item.datos ? item.datos : item;
+    const texto = String(datos && datos[campo] || '');
     if (!texto.startsWith(prefijo)) return 0;
     const numero = parseInt(texto.substring(prefijo.length), 10);
     return isNaN(numero) ? 0 : numero;
   });
-  const siguiente = (numeros.length ? Math.max.apply(null, numeros) : 0) + 1;
-  return prefijo + String(siguiente).padStart(largo, '0');
+  const max = numeros.length ? Math.max.apply(null, numeros) : 0;
+  return prefijo + String(max + 1).padStart(largo, '0');
 }
+
+function webSiguienteId_(hoja, campo, prefijo, largo) {
+  const tabla = webLeerTablaConFilas_(hoja);
+  return webCalcularSiguienteIdDesdeFilas_(tabla.filas, campo, prefijo, largo);
+}
+
 function webSiguienteIdActividad_(hoja, anio) {
   return webSiguienteId_(
     hoja,
@@ -2235,6 +2271,7 @@ function webSiguienteIdActividad_(hoja, anio) {
     3
   );
 }
+
 function webValidarObjeto_(objeto, campos) {
   campos.forEach(function(campo) {
     if (!objeto ||
@@ -2243,6 +2280,7 @@ function webValidarObjeto_(objeto, campos) {
     }
   });
 }
+
 function webNumeroNoNegativo_(valor, defecto) {
   const texto = String(valor ?? '').replace(',', '.').trim();
   const numero = texto === ''
@@ -2253,11 +2291,13 @@ function webNumeroNoNegativo_(valor, defecto) {
   }
   return numero;
 }
+
 function webNormalizarCertificado_(valor) {
   const clave = sigcNormalizarClave(valor);
   if (clave === 'no aplica') return 'No aplica';
   return sigcNormalizarSiNo(valor, 'No informado');
 }
+
 function webPartesFechaNacimiento_(valor) {
   if (valor instanceof Date && !isNaN(valor.getTime())) {
     return {
@@ -2286,6 +2326,7 @@ function webPartesFechaNacimiento_(valor) {
   }
   return null;
 }
+
 function webFechaNacimientoValida_(partes) {
   if (!partes) return false;
   const fecha = new Date(
@@ -2297,6 +2338,7 @@ function webFechaNacimientoValida_(partes) {
     fecha.getMonth() === partes.mes - 1 &&
     fecha.getDate() === partes.dia;
 }
+
 function webCalcularEdad_(valor) {
   const partes = webPartesFechaNacimiento_(valor);
   if (!webFechaNacimientoValida_(partes)) return '';
@@ -2317,6 +2359,7 @@ function webCalcularEdad_(valor) {
   if (aunNoCumple) edad--;
   return edad >= 0 && edad <= 120 ? edad : '';
 }
+
 function webNormalizarFechaNacimiento_(valor) {
   const texto = String(valor || '').trim();
   if (!texto) return '';
@@ -2342,6 +2385,7 @@ function webNormalizarFechaNacimiento_(valor) {
     String(partes.dia).padStart(2, '0')
   ].join('-');
 }
+
 function webFechaNumero_(valor) {
   const texto = String(valor || '').trim();
   if (!texto) return 0;
@@ -2366,6 +2410,7 @@ function webFechaNumero_(valor) {
   const fecha = new Date(texto);
   return isNaN(fecha.getTime()) ? 0 : fecha.getTime();
 }
+
 function webMesDesdeFecha_(valor) {
   const numero = webFechaNumero_(valor);
   if (!numero) return '';
@@ -2376,46 +2421,22 @@ function webMesDesdeFecha_(valor) {
   ];
   return meses[new Date(numero).getMonth()] || '';
 }
+
+const _schemaHeadersCache = new Map();
+
 function webAsegurarColumna_(hoja, encabezado) {
-  const ultimaColumna = Math.max(hoja.getLastColumn(), 1);
-  const encabezados = hoja.getRange(
-    1,
-    1,
-    1,
-    ultimaColumna
-  ).getValues()[0];
-  if (encabezados.map(sigcNormalizarEncabezado)
-      .indexOf(sigcNormalizarEncabezado(encabezado)) >= 0) {
-    return;
+  const nombreHoja = hoja.getName();
+  let encabezados = _schemaHeadersCache.get(nombreHoja);
+  if (!encabezados) {
+    const ultimaColumna = Math.max(hoja.getLastColumn(), 1);
+    encabezados = hoja.getRange(1, 1, 1, ultimaColumna).getValues()[0].map(sigcNormalizarEncabezado);
+    _schemaHeadersCache.set(nombreHoja, encabezados);
   }
-  hoja.getRange(1, ultimaColumna + 1).setValue(encabezado);
-}
-
-/**
- * MÉTODOS PUENTE PARA MÓDULOS DE CERTIFICADOS Y ASISTENCIA QR
- */
-function webObtenerConfigCertificado(idActividad) {
-  return sigcObtenerConfigCertificado(idActividad);
-}
-
-function webGuardarConfigCertificado(idActividad, config) {
-  return sigcGuardarConfigCertificado(idActividad, config);
-}
-
-function webGenerarCertificadosLote(idActividad, idsParticipantes, config) {
-  return sigcGenerarCertificadosLote(idActividad, idsParticipantes, config);
-}
-
-function webEnviarCertificadosEmail(idActividad, certificados, plantilla) {
-  return sigcEnviarCertificadosEmail(idActividad, certificados, plantilla);
-}
-
-function webGenerarTokenSesionQR(idActividad, numeroSesion, expiraMinutos) {
-  return sigcGenerarTokenSesionQR(idActividad, numeroSesion, expiraMinutos);
-}
-
-function webRegistrarAsistenciaQR(tokenSesion, documentoIdentidad) {
-  return sigcRegistrarAsistenciaQR(tokenSesion, documentoIdentidad);
+  const norm = sigcNormalizarEncabezado(encabezado);
+  if (encabezados.indexOf(norm) >= 0) return;
+  const colIndex = hoja.getLastColumn() + 1;
+  hoja.getRange(1, colIndex).setValue(encabezado);
+  encabezados.push(norm);
 }
 
 function webGuardarSpreadsheetId(nuevoId) {
