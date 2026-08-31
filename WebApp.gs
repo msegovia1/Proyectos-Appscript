@@ -1166,10 +1166,6 @@ function actualizarActividad(datos) {
     lock.releaseLock();
   }
 }
-  } finally {
-    lock.releaseLock();
-  }
-}
 
 /** Revisa vínculos antes de quitar una actividad. No modifica datos. */
 function obtenerImpactoQuitarActividad(idActividad) {
