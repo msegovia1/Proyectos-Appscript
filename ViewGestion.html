@@ -8,41 +8,67 @@
         <div class="card panel">
           <div class="gestion-selector">
             <div class="field">
-              <label>Actividad</label>
+              <label>Actividad de capacitación</label>
               <select id="gestionActividad" onchange="actualizarActividadAsistenciaSeleccionada()">
                 <option value="">Seleccione una actividad...</option>
               </select>
             </div>
             <button class="btn" type="button" onclick="cargarGestionActividad()">Cargar participantes</button>
           </div>
-          <div class="gestion-kpis">
-            <div class="card gestion-kpi"><span>Inscritos</span><strong id="gInscritos">0</strong></div>
-            <div class="card gestion-kpi"><span>Seleccionados</span><strong id="gSeleccionados">0</strong></div>
-            <div class="card gestion-kpi"><span>Confirmados</span><strong id="gConfirmados">0</strong></div>
-            <div class="card gestion-kpi"><span>Con asistencia</span><strong id="gAsistentes">0</strong></div>
-            <div class="card gestion-kpi"><span>Aprobados</span><strong id="gAprobados">0</strong></div>
+          <div class="module-kpis">
+            <div class="card module-kpi accent-blue"><span>Inscritos</span><strong id="gInscritos">0</strong></div>
+            <div class="card module-kpi accent-indigo"><span>Seleccionados</span><strong id="gSeleccionados">0</strong></div>
+            <div class="card module-kpi accent-teal"><span>Confirmados</span><strong id="gConfirmados">0</strong></div>
+            <div class="card module-kpi accent-amber"><span>Con asistencia</span><strong id="gAsistentes">0</strong></div>
+            <div class="card module-kpi accent-emerald"><span>Aprobados</span><strong id="gAprobados">0</strong></div>
           </div>
-          <div class="bulkbar">
-            <strong>Acciones masivas:</strong>
-            <button class="btn secondary" type="button" onclick="marcarTodosGestion(true)">Marcar visibles</button>
-            <button class="btn secondary" type="button" onclick="marcarTodosGestion(false)">Desmarcar</button>
-            <select id="bulkCumple">
-              <option value="">Requisitos...</option><option>Sí</option><option>No</option><option>Pendiente</option>
-            </select>
-            <button class="btn secondary" type="button" onclick="aplicarMasivo('CUMPLE_REQUISITOS','bulkCumple')">Aplicar</button>
-            <select id="bulkSeleccion">
-              <option value="">Selección...</option><option>Seleccionado</option><option>Lista de espera</option><option>No seleccionado</option><option>Pendiente</option>
-            </select>
-            <button class="btn secondary" type="button" onclick="aplicarMasivo('ESTADO_SELECCION','bulkSeleccion')">Aplicar</button>
-            <select id="bulkConfirma">
-              <option value="">Confirmación...</option><option>Sí</option><option>No</option><option>No informado</option>
-            </select>
-            <button class="btn secondary" type="button" onclick="aplicarMasivo('CONFIRMA_PARTICIPACION','bulkConfirma')">Aplicar</button>
-            <button class="btn secondary" type="button" onclick="marcarAsistenciaCompleta()">Asistencia completa</button>
-            <button class="btn secondary" type="button" onclick="marcarAsistenciaCero()">Asistencia en 0</button>
+          <div class="bulk-panel">
+            <div class="bulk-header">
+              <span class="bulk-title">⚡ Acciones masivas</span>
+              <div class="bulk-selection-tools">
+                <button class="btn secondary compact" type="button" onclick="marcarTodosGestion(true)">☑ Marcar visibles</button>
+                <button class="btn secondary compact" type="button" onclick="marcarTodosGestion(false)">☐ Desmarcar</button>
+              </div>
+            </div>
+            <div class="bulk-controls">
+              <div class="bulk-group">
+                <label>Requisitos:</label>
+                <div class="input-action-group">
+                  <select id="bulkCumple">
+                    <option value="">Seleccionar...</option><option>Sí</option><option>No</option><option>Pendiente</option>
+                  </select>
+                  <button class="btn secondary compact" type="button" onclick="aplicarMasivo('CUMPLE_REQUISITOS','bulkCumple')">Aplicar</button>
+                </div>
+              </div>
+              <div class="bulk-group">
+                <label>Selección:</label>
+                <div class="input-action-group">
+                  <select id="bulkSeleccion">
+                    <option value="">Seleccionar...</option><option>Seleccionado</option><option>Lista de espera</option><option>No seleccionado</option><option>Pendiente</option>
+                  </select>
+                  <button class="btn secondary compact" type="button" onclick="aplicarMasivo('ESTADO_SELECCION','bulkSeleccion')">Aplicar</button>
+                </div>
+              </div>
+              <div class="bulk-group">
+                <label>Confirmación:</label>
+                <div class="input-action-group">
+                  <select id="bulkConfirma">
+                    <option value="">Seleccionar...</option><option>Sí</option><option>No</option><option>No informado</option>
+                  </select>
+                  <button class="btn secondary compact" type="button" onclick="aplicarMasivo('CONFIRMA_PARTICIPACION','bulkConfirma')">Aplicar</button>
+                </div>
+              </div>
+              <div class="bulk-group">
+                <label>Asistencia:</label>
+                <div class="bulk-buttons-group">
+                  <button class="btn secondary compact" type="button" onclick="marcarAsistenciaCompleta()">100%</button>
+                  <button class="btn secondary compact" type="button" onclick="marcarAsistenciaCero()">En 0</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="table-tools">
-            <input id="buscarGestion" placeholder="Buscar por nombre o RUT..." oninput="renderGestion()">
+            <input id="buscarGestion" placeholder="🔍 Buscar por nombre o RUT..." oninput="renderGestion()">
             <select id="filtroGestionSeleccion" onchange="renderGestion()">
               <option value="">Todos los estados</option>
               <option>Seleccionado</option><option>Lista de espera</option><option>No seleccionado</option><option>Pendiente</option>
@@ -87,11 +113,11 @@
         </div>
         <div id="estadoReporteAsistencias" class="notice" style="margin-bottom:14px">Seleccione una actividad en la parte superior. La nómina incluirá sus participantes y mostrará cuántas sesiones asistieron. Contiene datos personales de uso institucional.</div>
         <div class="module-kpis">
-          <div class="card module-kpi"><span>Registros</span><strong id="asisRegistros">0</strong></div>
-          <div class="card module-kpi"><span>Personas únicas</span><strong id="asisPersonas">0</strong></div>
-          <div class="card module-kpi"><span>Actividades</span><strong id="asisActividades">0</strong></div>
-          <div class="card module-kpi"><span>Asistencia promedio</span><strong id="asisPromedio">0%</strong></div>
-          <div class="card module-kpi"><span>Certificados</span><strong id="asisCertificados">0</strong></div>
+          <div class="card module-kpi accent-blue"><span>Registros</span><strong id="asisRegistros">0</strong></div>
+          <div class="card module-kpi accent-indigo"><span>Personas únicas</span><strong id="asisPersonas">0</strong></div>
+          <div class="card module-kpi accent-teal"><span>Actividades</span><strong id="asisActividades">0</strong></div>
+          <div class="card module-kpi accent-emerald"><span>Asistencia promedio</span><strong id="asisPromedio">0%</strong></div>
+          <div class="card module-kpi accent-purple"><span>Certificados</span><strong id="asisCertificados">0</strong></div>
         </div>
         <div class="table-container"><table><thead><tr><th>Persona</th><th>Documento</th><th>Correo</th><th>Teléfono</th><th>Comuna</th><th>PMJH</th><th>Capacitación</th><th>Año</th><th>Escuela / área</th><th>Institución</th><th>Selección</th><th>Sesiones asistidas</th><th>Sesiones totales</th><th>% asistencia</th><th>Resultado</th><th>Certificado</th><th>Actualización</th></tr></thead><tbody id="tablaReporteAsistencias"><tr><td colspan="17" class="empty-state">Seleccione una actividad y genere la nómina.</td></tr></tbody></table></div>
         <div class="pager"><span id="paginaAsistenciasInfo"></span><button class="btn secondary" type="button" onclick="cambiarPaginaAsistencias(-1)">Anterior</button><button class="btn secondary" type="button" onclick="cambiarPaginaAsistencias(1)">Siguiente</button></div>
