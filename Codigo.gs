@@ -223,6 +223,86 @@ function eliminarTriggerFormularioVinculadoSiNoSeUsa_(spreadsheetId) {
   return {eliminados: eliminados, motivo: 'La Sheet ya no tiene vinculaciones activas.'};
 }
 
+/**
+ * Cierra automáticamente la recepción de respuestas en Google Forms y desactiva
+ * las vinculaciones y activadores de una actividad cuando esta pasa a 'En ejecución',
+ * 'Ejecutada', 'Suspendida', 'Cerrada' o 'Archivada'.
+ */
+function cerrarFormulariosYActivadoresActividad_(idActividad, nuevoEstado) {
+  idActividad = String(idActividad || '').trim();
+  nuevoEstado = String(nuevoEstado || '').trim();
+  if (!idActividad) return { cerrados: 0, formulariosDesactivados: 0 };
+
+  const estadosCierre = [
+    'EN EJECUCION', 'EN EJECUCIÓN', 'EJECUTADA', 'SUSPENDIDA', 'CERRADA', 'ARCHIVADA'
+  ];
+  const estadoNorm = normalizarEncabezado_(nuevoEstado);
+  if (estadosCierre.indexOf(estadoNorm) < 0) return { cerrados: 0, formulariosDesactivados: 0 };
+
+  const ss = sigcSpreadsheetCentral_();
+  const hojaConfig = ss.getSheetByName(SISTEMA.HOJAS.FORMULARIOS || 'CONFIG_FORMULARIOS');
+  if (!hojaConfig || hojaConfig.getLastRow() < 2) return { cerrados: 0, formulariosDesactivados: 0 };
+
+  const datos = hojaConfig.getDataRange().getValues();
+  const mapa = mapaEncabezados_(datos[0]);
+  let formsCerrados = 0;
+  let vinculacionesDesactivadas = 0;
+  const spreadsheetsParaTrigger = [];
+
+  for (let i = 1; i < datos.length; i++) {
+    const filaActId = String(datos[i][mapa['ID ACTIVIDAD']] || '').trim();
+    if (filaActId !== idActividad) continue;
+
+    const estadoForm = normalizarEncabezado_(datos[i][mapa['ESTADO']]);
+    const formId = String(datos[i][mapa['FORM ID']] || '').trim();
+    const spreadsheetId = String(datos[i][mapa['SPREADSHEET RESPUESTAS ID']] || '').trim();
+
+    // 1. Cerrar formulario Google Form
+    if (formId) {
+      try {
+        const form = FormApp.openById(formId);
+        if (form) {
+          form.setAcceptingResponses(false);
+          form.setCustomClosedFormMessage(
+            'El periodo de postulación/inscripción para esta actividad ha finalizado (' + nuevoEstado + '). ' +
+            'Municipalidad de Santiago — Sistema Integrado de Capacitaciones.'
+          );
+          formsCerrados++;
+        }
+      } catch (eForm) {
+        console.warn('No se pudo cerrar formulario ' + formId + ': ' + eForm.message);
+      }
+    }
+
+    // 2. Si la vinculación estaba activa, marcarla como Inactivo
+    if (estadoForm === 'ACTIVO') {
+      hojaConfig.getRange(i + 1, mapa['ESTADO'] + 1).setValue('Inactivo');
+      vinculacionesDesactivadas++;
+      if (spreadsheetId && spreadsheetsParaTrigger.indexOf(spreadsheetId) < 0) {
+        spreadsheetsParaTrigger.push(spreadsheetId);
+      }
+    }
+  }
+
+  // 3. Limpiar activadores de las planillas de respuestas si ya no tienen formularios activos
+  spreadsheetsParaTrigger.forEach(function(ssId) {
+    try {
+      eliminarTriggerFormularioVinculadoSiNoSeUsa_(ssId);
+    } catch (eTrig) {
+      console.warn('Error al verificar activador para ' + ssId + ': ' + eTrig.message);
+    }
+  });
+
+  if (vinculacionesDesactivadas > 0 || formsCerrados > 0) {
+    try { CacheService.getScriptCache().remove('SIGC_PANEL_FORMULARIOS_V1'); } catch (e) {}
+  }
+
+  return {
+    cerrados: formsCerrados,
+    formulariosDesactivados: vinculacionesDesactivadas
+  };
+}
+
 function alEnviarFormularioVinculado(e) {
   if (!e || !e.range || !e.source) {
     console.error('Evento de formulario no válido.');
@@ -327,7 +407,7 @@ function resolverOrigenFormularioDesdeUrl_(url) {
   return {spreadsheetId: spreadsheetId, archivo: ss.getName(), hoja: hoja.getName()};
 }
 
-/** Entrega al módulo Formularios un resumen operativo sin exponer IDs técnicos. */
+/** Entrega al módulo Formularios un resumen operativo sin exponer IDs técnicos y de forma optimizada. */
 function obtenerFormulariosVinculados() {
   prepararConfigFormularios();
   const central = sigcSpreadsheetCentral_();
@@ -337,6 +417,24 @@ function obtenerFormulariosVinculados() {
   const mapa = mapaEncabezados_(datos[0]);
   const triggers = ScriptApp.getProjectTriggers();
   const origenesPorId = {};
+
+  // Pre-indexar actividades en memoria para evitar lecturas repetitivas
+  const hojaActividades = central.getSheetByName(SISTEMA.HOJAS.ACTIVIDADES);
+  const mapaActividades = {};
+  if (hojaActividades && hojaActividades.getLastRow() >= 2) {
+    const actDatos = hojaActividades.getDataRange().getValues();
+    const actMapa = mapaEncabezados_(actDatos[0]);
+    for (let a = 1; a < actDatos.length; a++) {
+      const idAct = String(actDatos[a][actMapa['ID ACTIVIDAD']] || '').trim();
+      if (idAct) {
+        mapaActividades[idAct] = {
+          id: idAct,
+          nombre: String(actDatos[a][actMapa['NOMBRE ACTIVIDAD']] || '')
+        };
+      }
+    }
+  }
+
   return datos.slice(1).filter(function(fila) {
     return fila.some(function(v) { return v !== ''; });
   }).map(function(fila) {
@@ -344,54 +442,60 @@ function obtenerFormulariosVinculados() {
       return mapa[campo] === undefined ? '' : fila[mapa[campo]];
     }
     const idConfig = fila[mapa['ID CONFIG']];
-    const spreadsheetId = String(fila[mapa['SPREADSHEET RESPUESTAS ID']] || '');
-    const nombreHoja = String(fila[mapa['HOJA RESPUESTAS']] || '');
-    const idActividad = String(fila[mapa['ID ACTIVIDAD']] || '');
+    const spreadsheetId = String(fila[mapa['SPREADSHEET RESPUESTAS ID']] || '').trim();
+    const nombreHoja = String(fila[mapa['HOJA RESPUESTAS']] || '').trim();
+    const idActividad = String(fila[mapa['ID ACTIVIDAD']] || '').trim();
     const tipoFormulario = String(fila[mapa['TIPO']] || 'INSCRIPCION');
-    const actividad = resolverActividad_(idActividad);
+    const actividad = mapaActividades[idActividad] || null;
     const resumen = {
       total: 0, procesadas: 0, advertencias: 0, duplicadas: 0, revision: 0, pendientes: 0, detallesRevision: []
     };
     let archivo = 'Hoja de respuestas';
-    try {
-      const origen = origenesPorId[spreadsheetId] ||
-        (origenesPorId[spreadsheetId] = SpreadsheetApp.openById(spreadsheetId));
-      archivo = origen.getName();
-      const respuestas = origen.getSheetByName(nombreHoja);
-      if (respuestas && respuestas.getLastRow() >= 2) {
-        const ultimaFila = respuestas.getLastRow();
-        const ultimaColumna = respuestas.getLastColumn();
-        const encabezados = respuestas.getRange(1, 1, 1, ultimaColumna).getValues()[0];
-        const mr = mapaEncabezados_(encabezados);
-        const colEstado = mr['ESTADO PROCESO'];
-        const colDetalle = mr['DETALLE PROCESO'];
-        const cantidad = ultimaFila - 1;
-        const estados = colEstado === undefined
-          ? Array.from({length: cantidad}, function() { return ['']; })
-          : respuestas.getRange(2, colEstado + 1, cantidad, 1).getValues();
-        const detalles = colDetalle === undefined
-          ? []
-          : respuestas.getRange(2, colDetalle + 1, cantidad, 1).getDisplayValues();
-        resumen.total = cantidad;
-        for (let i = 0; i < cantidad; i++) {
-          const estado = normalizarEncabezado_(estados[i][0]);
-          if (estado === 'PROCESADO') resumen.procesadas++;
-          else if (estado === 'PROCESADO CON ADVERTENCIA') resumen.advertencias++;
-          else if (estado === 'DUPLICADO') resumen.duplicadas++;
-          else if (estado === 'REVISION' || estado === 'ERROR') {
-            resumen.revision++;
-            if (resumen.detallesRevision.length < 5) {
-              resumen.detallesRevision.push({
-                fila: i + 2,
-                detalle: colDetalle === undefined ? 'Requiere revisión.' : String(detalles[i][0] || 'Requiere revisión.')
-              });
+
+    if (spreadsheetId) {
+      try {
+        const origen = origenesPorId[spreadsheetId] ||
+          (origenesPorId[spreadsheetId] = (spreadsheetId === central.getId() ? central : SpreadsheetApp.openById(spreadsheetId)));
+        archivo = origen.getName();
+        const respuestas = nombreHoja ? origen.getSheetByName(nombreHoja) : null;
+        if (respuestas && respuestas.getLastRow() >= 2) {
+          const ultimaFila = respuestas.getLastRow();
+          const ultimaColumna = Math.min(respuestas.getLastColumn(), 50);
+          const encabezados = respuestas.getRange(1, 1, 1, ultimaColumna).getValues()[0];
+          const mr = mapaEncabezados_(encabezados);
+          const colEstado = mr['ESTADO PROCESO'];
+          const colDetalle = mr['DETALLE PROCESO'];
+          const cantidad = ultimaFila - 1;
+          resumen.total = cantidad;
+
+          if (colEstado !== undefined) {
+            const estados = respuestas.getRange(2, colEstado + 1, cantidad, 1).getValues();
+            for (let i = 0; i < cantidad; i++) {
+              const estado = normalizarEncabezado_(estados[i][0]);
+              if (estado === 'PROCESADO') resumen.procesadas++;
+              else if (estado === 'PROCESADO CON ADVERTENCIA' || estado === 'PROCESADO_CON_ADVERTENCIA') resumen.advertencias++;
+              else if (estado === 'DUPLICADO') resumen.duplicadas++;
+              else if (estado === 'REVISION' || estado === 'ERROR') {
+                resumen.revision++;
+                if (resumen.detallesRevision.length < 5) {
+                  resumen.detallesRevision.push({
+                    fila: i + 2,
+                    detalle: 'Requiere revisión.'
+                  });
+                }
+              } else {
+                resumen.pendientes++;
+              }
             }
-          } else resumen.pendientes++;
+          } else {
+            resumen.pendientes = cantidad;
+          }
         }
+      } catch (error) {
+        resumen.detallesRevision.push({fila: '', detalle: 'No se pudo leer la hoja: ' + error.message});
       }
-    } catch (error) {
-      resumen.detallesRevision.push({fila: '', detalle: 'No se pudo leer la hoja de respuestas: ' + error.message});
     }
+
     const creadoPorSigc = String(valorConfig_('CREADO POR SIGC') || '');
     const formId = String(valorConfig_('FORM ID') || '');
     const urlPublica = String(valorConfig_('FORM URL PUBLICA') || '');
@@ -405,7 +509,7 @@ function obtenerFormulariosVinculados() {
         ? (normalizarEncabezado_(creadoPorSigc) === 'SI'
           ? 'Registro público de personas e intereses'
           : 'Base madre / interés general')
-        : (actividad ? actividad.nombre : idActividad),
+        : (actividad ? actividad.nombre : (idActividad || 'Sin asignar')),
       archivo: archivo,
       hoja: nombreHoja,
       estado: String(fila[mapa['ESTADO']] || 'Inactivo'),
@@ -436,7 +540,7 @@ function obtenerPanelFormularios(forzarActualizacion) {
         return salidaCache;
       }
     } catch (error) {
-      // La caché es una mejora opcional y nunca debe impedir la consulta.
+      // La caché es opcional
     }
   }
   const formularios = obtenerFormulariosVinculados();
@@ -481,9 +585,221 @@ function obtenerPanelFormularios(forzarActualizacion) {
       SIGC_CONFIG.CACHE_FORMULARIOS_SEGUNDOS || 300
     );
   } catch (error) {
-    // Un panel grande puede exceder la caché; en ese caso se entrega normalmente.
+    // Si excede la caché se entrega normalmente
   }
   return salida;
+}
+
+/**
+ * Crea o verifica el Google Form institucional oficial para el registro público
+ * de personas e intereses de capacitación, vinculándolo con la planilla central.
+ */
+function crearFormularioRegistroInteresesDesdeWeb() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    prepararConfigFormularios();
+    const central = sigcSpreadsheetCentral_();
+    const hojaConfig = central.getSheetByName(SISTEMA.HOJAS.FORMULARIOS);
+    const datos = hojaConfig.getDataRange().getValues();
+    const mapa = mapaEncabezados_(datos[0]);
+    
+    // 1. Buscar si ya existe un formulario institucional registrado y activo
+    for (let i = 1; i < datos.length; i++) {
+      const tipo = normalizarEncabezado_(datos[i][mapa['TIPO']]);
+      const creadoSigc = normalizarEncabezado_(datos[i][mapa['CREADO POR SIGC']]);
+      const formId = String(datos[i][mapa['FORM ID']] || '').trim();
+      const ssRespId = String(datos[i][mapa['SPREADSHEET RESPUESTAS ID']] || '').trim();
+      
+      if (tipo === 'INTERES GENERAL' && creadoSigc === 'SI' && formId) {
+        try {
+          const formExistente = FormApp.openById(formId);
+          if (formExistente) {
+            if (ssRespId) {
+              instalarTriggerFormularioVinculado_(ssRespId);
+            }
+            hojaConfig.getRange(i + 1, mapa['ESTADO'] + 1).setValue('Activo');
+            try { CacheService.getScriptCache().remove('SIGC_PANEL_FORMULARIOS_V1'); } catch (e) {}
+            return {
+              ok: true,
+              mensaje: 'El formulario institucional ya existe y ha sido verificado con éxito.',
+              formId: formId,
+              urlPublica: formExistente.getPublishedUrl(),
+              urlEdicion: formExistente.getEditUrl(),
+              urlRespuestas: ssRespId ? 'https://docs.google.com/spreadsheets/d/' + ssRespId + '/edit' : ''
+            };
+          }
+        } catch (eForm) {
+          console.warn('Formulario previo no accesible, se procederá a generar uno nuevo: ' + eForm.message);
+        }
+      }
+    }
+    
+    // 2. Crear el nuevo formulario oficial en Google Forms
+    const titulo = 'SIGC — Registro e Intereses de Capacitación';
+    const form = FormApp.create(titulo);
+    form.setDescription(
+      'Municipalidad de Santiago • Sistema Integrado de Gestión de Capacitaciones (SIGC)\n\n' +
+      'Complete este formulario para registrarse en la base comunal y señalar sus áreas de interés formativo. ' +
+      'Nos comunicaremos oportunamente para invitarle a cursos, talleres y programas acordes a sus preferencias.'
+    );
+    form.setConfirmationMessage(
+      '¡Muchas gracias por registrar sus datos e intereses! Su información ha sido incorporada al Sistema Integrado de Capacitaciones de la Municipalidad de Santiago.'
+    );
+    form.setAllowResponseEdits(false);
+    form.setCollectEmail(false);
+    
+    // 3. Crear campos ordenados y normalizados
+    form.addTextItem()
+      .setTitle('Nombre completo')
+      .setHelpText('Ingrese sus nombres y apellidos completos.')
+      .setRequired(true);
+      
+    form.addMultipleChoiceItem()
+      .setTitle('Tipo de documento')
+      .setChoiceValues(['RUT', 'Pasaporte'])
+      .setRequired(true);
+      
+    form.addTextItem()
+      .setTitle('Número de documento / RUT')
+      .setHelpText('Si es RUT, escriba con puntos y guion (Ej.: 12.345.678-9). Si es pasaporte, ingrese el número exacto.')
+      .setRequired(true);
+      
+    form.addTextItem()
+      .setTitle('Correo electrónico')
+      .setHelpText('Correo donde recibirá convocatorias y novedades (Ej.: usuario@ejemplo.cl).')
+      .setRequired(true);
+      
+    form.addTextItem()
+      .setTitle('Teléfono')
+      .setHelpText('Número móvil de contacto (Ej.: +56912345678).')
+      .setRequired(false);
+      
+    form.addTextItem()
+      .setTitle('Comuna')
+      .setHelpText('Comuna donde vive actualmente (Ej.: Santiago).')
+      .setRequired(false);
+      
+    form.addTextItem()
+      .setTitle('Barrio')
+      .setHelpText('Barrio o sector de residencia (Ej.: Yungay, Franklin, Meiggs, etc.).')
+      .setRequired(false);
+      
+    form.addDateItem()
+      .setTitle('Fecha nacimiento')
+      .setRequired(false);
+      
+    form.addMultipleChoiceItem()
+      .setTitle('Género')
+      .setChoiceValues(['Femenino', 'Masculino', 'No binario', 'Otro / Prefiero no informar'])
+      .setRequired(false);
+      
+    form.addTextItem()
+      .setTitle('Nacionalidad')
+      .setHelpText('Ej.: Chilena, Peruana, Venezolana, Colombiana, etc.')
+      .setRequired(false);
+      
+    form.addMultipleChoiceItem()
+      .setTitle('Participa o participó en PMJH')
+      .setChoiceValues(['Sí', 'No', 'No informado'])
+      .setRequired(false);
+      
+    form.addCheckboxItem()
+      .setTitle('Escuela / línea')
+      .setChoiceValues(['Empleo', 'Emprendimiento', 'Transversal'])
+      .setHelpText('Seleccione una o más opciones.')
+      .setRequired(false);
+      
+    form.addCheckboxItem()
+      .setTitle('Área temática')
+      .setChoiceValues([
+        'Alfabetización y Competencias Digitales',
+        'Gestión de Emprendimiento y Finanzas',
+        'Marketing Digital y Redes Sociales',
+        'Ventas y Comercio Electrónico',
+        'Oficios y Servicios',
+        'Habilidades Laborales y Empleabilidad',
+        'Idiomas',
+        'Liderazgo y Habilidades Transversales'
+      ])
+      .setHelpText('Seleccione las áreas temáticas en las que le gustaría capacitarse.')
+      .setRequired(false);
+      
+    form.addMultipleChoiceItem()
+      .setTitle('Autoriza contacto')
+      .setChoiceValues(['Sí', 'No'])
+      .setRequired(true);
+      
+    form.addParagraphTextItem()
+      .setTitle('Observaciones')
+      .setHelpText('Indique requerimientos especiales o temáticas adicionales de su interés.')
+      .setRequired(false);
+      
+    // 4. Vincular el destino de respuestas a la planilla central
+    const hojasPrevias = central.getSheets().map(function(s) { return s.getName(); });
+    form.setDestination(FormApp.DestinationType.SPREADSHEET, central.getId());
+    SpreadsheetApp.flush();
+    Utilities.sleep(1000);
+    
+    // Identificar la pestaña de respuestas vinculada
+    const hojasActuales = central.getSheets();
+    let nombreHojaRespuestas = '';
+    for (let h = 0; h < hojasActuales.length; h++) {
+      const s = hojasActuales[h];
+      if (hojasPrevias.indexOf(s.getName()) === -1) {
+        nombreHojaRespuestas = s.getName();
+        break;
+      }
+    }
+    if (!nombreHojaRespuestas) {
+      for (let h = 0; h < hojasActuales.length; h++) {
+        const s = hojasActuales[h];
+        try {
+          if (s.getFormUrl() && s.getFormUrl().indexOf(form.getId()) >= 0) {
+            nombreHojaRespuestas = s.getName();
+            break;
+          }
+        } catch (e) {}
+      }
+    }
+    if (!nombreHojaRespuestas) {
+      const ultima = hojasActuales[hojasActuales.length - 1];
+      nombreHojaRespuestas = ultima.getName();
+    }
+    
+    // 5. Registrar en CONFIG_FORMULARIOS
+    const idConfig = 'FOR-INT-' + Utilities.getUuid().slice(0, 6).toUpperCase();
+    hojaConfig.appendRow([
+      idConfig,
+      'INTERES GENERAL',
+      central.getId(),
+      nombreHojaRespuestas,
+      '',
+      'Activo',
+      new Date(),
+      form.getId(),
+      form.getPublishedUrl(),
+      form.getEditUrl(),
+      'SI'
+    ]);
+    
+    // 6. Instalar activador automático para la planilla central
+    instalarTriggerFormularioVinculado_(central.getId());
+    
+    // 7. Invalidar caché para actualización inmediata
+    try { CacheService.getScriptCache().remove('SIGC_PANEL_FORMULARIOS_V1'); } catch (e) {}
+    
+    return {
+      ok: true,
+      mensaje: '¡Formulario institucional creado y vinculado exitosamente!',
+      formId: form.getId(),
+      urlPublica: form.getPublishedUrl(),
+      urlEdicion: form.getEditUrl(),
+      urlRespuestas: 'https://docs.google.com/spreadsheets/d/' + central.getId() + '/edit'
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function cambiarEstadoFormularioVinculado(idConfig, activar) {
@@ -902,12 +1218,17 @@ function actualizarEstadosActividadesVencidas() {
     }
     if (ids.length) {
       SpreadsheetApp.flush();
+      ids.forEach(function(idAct) {
+        if (idAct) {
+          try { cerrarFormulariosYActivadoresActividad_(idAct, 'Ejecutada'); } catch (e) {}
+        }
+      });
       if (typeof webInvalidarDashboard_ === 'function') webInvalidarDashboard_();
       sigcRegistrarLog(
         'ACTUALIZACION AUTOMATICA',
         'ACTIVIDAD',
         ids.filter(Boolean).join(', '),
-        ids.length + ' actividad(es) pasaron a Ejecutada por fecha de término.'
+        ids.length + ' actividad(es) pasaron a Ejecutada por fecha de término. Formularios y activadores cerrados automáticamente.'
       );
     }
     return {ok:true, actualizadas:ids.length, ids:ids};
