@@ -1116,20 +1116,30 @@ let DB = {personas:[], actividades:[], participaciones:[], intereses:[], demanda
       const idx = GESTION.participaciones.indexOf(p);
       const id = String(p.ID_PARTICIPACION || '');
       const marcado = GESTION_SELECCIONADOS.has(id) ? 'checked' : '';
+
+      const resultado = p.RESULTADO_FINAL || 'Pendiente';
+      let badgeClase = 'neutral';
+      if (resultado === 'Aprobado' || resultado === 'Participó') badgeClase = 'success';
+      else if (resultado === 'Desaprobado' || resultado === 'No participó') badgeClase = 'danger';
+      else if (resultado === 'Pendiente') badgeClase = 'warning';
+
+      const pmjh = p.PARTICIPA_PMJH || 'No informado';
+      const pmjhBadge = pmjh === 'Sí' ? 'badge success' : (pmjh === 'No' ? 'badge neutral' : 'badge neutral');
+
       return `<tr data-idx="${idx}" data-id="${esc(id)}">
-        <td><input type="checkbox" class="gestion-check" data-id="${esc(id)}" ${marcado} onchange="cambiarSeleccionGestion(this)"></td>
-        <td class="nombre"><strong>${esc(p.NOMBRE_COMPLETO)}</strong><br><small>${esc(p.CORREO || '')}</small></td>
-        <td>${esc(p.DOCUMENTO || p.RUT)}</td>
-        <td>${esc(edadVisible(p.EDAD))}</td>
-        <td><span class="badge">${esc(p.PARTICIPA_PMJH || 'No informado')}</span></td>
-        <td>${selectGestion('CUMPLE_REQUISITOS', p.CUMPLE_REQUISITOS, ['Pendiente','Sí','No','No informado'])}</td>
-        <td>${selectGestion('ESTADO_SELECCION', p.ESTADO_SELECCION, ['Pendiente','Seleccionado','Lista de espera','No seleccionado','No informado'])}</td>
-        <td>${selectGestion('CONFIRMA_PARTICIPACION', p.CONFIRMA_PARTICIPACION, ['No informado','Sí','No'])}</td>
-        <td><input data-campo="SESIONES_ASISTIDAS" type="number" min="0" value="${esc(numeroPlano(p.SESIONES_ASISTIDAS,0))}" onchange="registrarCambioGestion(this)"></td>
-        <td><input data-campo="SESIONES_TOTALES" type="number" min="1" value="${esc(numeroPlano(p.SESIONES_TOTALES, GESTION.actividad?.SESIONES_TOTALES || 1))}" onchange="registrarCambioGestion(this)"></td>
-        <td><span class="badge">${esc(p.RESULTADO_FINAL || 'Pendiente')}</span></td>
-        <td>${selectGestion('CERTIFICADO', p.CERTIFICADO, ['No informado','Sí','No','No aplica'])}</td>
-        <td><input class="obs" data-campo="OBSERVACIONES" value="${esc(p.OBSERVACIONES || '')}" onchange="registrarCambioGestion(this)"></td>
+        <td class="col-check td-center"><input type="checkbox" class="gestion-check" data-id="${esc(id)}" ${marcado} onchange="cambiarSeleccionGestion(this)"></td>
+        <td class="col-persona nombre"><strong>${esc(p.NOMBRE_COMPLETO)}</strong><small>${esc(p.CORREO || 'Sin correo')}</small></td>
+        <td class="col-doc">${esc(p.DOCUMENTO || p.RUT || '—')}</td>
+        <td class="col-edad td-center">${esc(edadVisible(p.EDAD))}</td>
+        <td class="col-pmjh td-center"><span class="${pmjhBadge}">${esc(pmjh)}</span></td>
+        <td class="col-requisitos">${selectGestion('CUMPLE_REQUISITOS', p.CUMPLE_REQUISITOS, ['Pendiente','Sí','No','No informado'])}</td>
+        <td class="col-seleccion">${selectGestion('ESTADO_SELECCION', p.ESTADO_SELECCION, ['Pendiente','Seleccionado','Lista de espera','No seleccionado','No informado'])}</td>
+        <td class="col-confirma">${selectGestion('CONFIRMA_PARTICIPACION', p.CONFIRMA_PARTICIPACION, ['No informado','Sí','No'])}</td>
+        <td class="col-asistidas td-center"><input data-campo="SESIONES_ASISTIDAS" type="number" min="0" value="${esc(numeroPlano(p.SESIONES_ASISTIDAS,0))}" onchange="registrarCambioGestion(this)"></td>
+        <td class="col-total td-center"><input data-campo="SESIONES_TOTALES" type="number" min="1" value="${esc(numeroPlano(p.SESIONES_TOTALES, GESTION.actividad?.SESIONES_TOTALES || 1))}" onchange="registrarCambioGestion(this)"></td>
+        <td class="col-resultado td-center"><span class="badge ${badgeClase}">${esc(resultado)}</span></td>
+        <td class="col-cert">${selectGestion('CERTIFICADO', p.CERTIFICADO, ['No informado','Sí','No','No aplica'])}</td>
+        <td class="col-obs"><input class="obs" data-campo="OBSERVACIONES" placeholder="Observación..." value="${esc(p.OBSERVACIONES || '')}" onchange="registrarCambioGestion(this)"></td>
       </tr>`;
     }).join('');
     actualizarCheckPrincipalGestion();

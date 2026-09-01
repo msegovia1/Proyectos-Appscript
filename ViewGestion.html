@@ -78,16 +78,26 @@
           <div class="table-container gestion-scroll" tabindex="0" aria-label="Tabla desplazable de gestión de participantes">
             <table class="gestion-table">
               <thead><tr>
-                <th>
+                <th class="col-check">
                   <input
                     id="checkTodosGestion"
                     type="checkbox"
                     title="Marcar o desmarcar participantes visibles"
                     onchange="alternarTodosGestion(this)"
                   >
-                </th><th>Persona</th><th>Documento</th><th>Edad</th><th>PMJH</th><th>Cumple requisitos</th>
-                <th>Selección</th><th>Confirma</th><th>Asistidas</th><th>Total</th><th>Resultado</th>
-                <th>Certificado</th><th>Observaciones</th>
+                </th>
+                <th class="col-persona">Persona</th>
+                <th class="col-doc">Documento</th>
+                <th class="col-edad th-center">Edad</th>
+                <th class="col-pmjh th-center">PMJH</th>
+                <th class="col-requisitos">Cumple requisitos</th>
+                <th class="col-seleccion">Selección</th>
+                <th class="col-confirma">Confirmación</th>
+                <th class="col-asistidas th-center">Asistidas</th>
+                <th class="col-total th-center">Total</th>
+                <th class="col-resultado th-center">Resultado</th>
+                <th class="col-cert">Certificado</th>
+                <th class="col-obs">Observaciones</th>
               </tr></thead>
               <tbody id="tablaGestion">
                 <tr><td colspan="13" class="empty-state">Seleccione una actividad para comenzar.</td></tr>

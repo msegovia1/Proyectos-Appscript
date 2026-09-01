@@ -954,7 +954,116 @@
   }
 
   .gestion-scroll .gestion-table {
-    min-width: 1800px;
+    width: 100%;
+    min-width: 1750px;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .gestion-table th {
+    padding: 12px 14px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--gris);
+    background: #f8fafc;
+    border-bottom: 2px solid var(--borde);
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .gestion-table th.th-center,
+  .gestion-table td.td-center {
+    text-align: center;
+  }
+
+  .gestion-table td {
+    padding: 10px 12px;
+    font-size: 13px;
+    vertical-align: middle;
+    border-bottom: 1px solid var(--borde-subtle);
+  }
+
+  .gestion-table tr:hover td {
+    background: #f1f5f9;
+  }
+
+  .gestion-table .col-check { width: 44px; text-align: center; }
+  .gestion-table .col-persona { min-width: 230px; max-width: 280px; }
+  .gestion-table .col-doc { min-width: 120px; white-space: nowrap; }
+  .gestion-table .col-edad { min-width: 80px; text-align: center; white-space: nowrap; }
+  .gestion-table .col-pmjh { min-width: 110px; text-align: center; }
+  .gestion-table .col-requisitos { min-width: 145px; }
+  .gestion-table .col-seleccion { min-width: 160px; }
+  .gestion-table .col-confirma { min-width: 145px; }
+  .gestion-table .col-asistidas { min-width: 85px; text-align: center; }
+  .gestion-table .col-total { min-width: 85px; text-align: center; }
+  .gestion-table .col-resultado { min-width: 135px; text-align: center; }
+  .gestion-table .col-cert { min-width: 145px; }
+  .gestion-table .col-obs { min-width: 220px; }
+
+  .gestion-table td.nombre strong {
+    display: block;
+    color: var(--texto);
+    font-size: 13.5px;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .gestion-table td.nombre small {
+    display: block;
+    color: var(--gris);
+    font-size: 11.5px;
+    margin-top: 2px;
+    word-break: break-all;
+  }
+
+  .gestion-table select {
+    width: 100%;
+    min-width: 130px;
+    padding: 7px 24px 7px 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--borde);
+    background-color: var(--blanco);
+    cursor: pointer;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .gestion-table select:focus {
+    border-color: var(--azul-2);
+    box-shadow: 0 0 0 2px rgba(30, 58, 138, 0.15);
+  }
+
+  .gestion-table input[type="number"] {
+    width: 60px;
+    text-align: center;
+    padding: 7px 6px;
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--borde);
+    margin: 0 auto;
+    display: block;
+  }
+
+  .gestion-table input.obs {
+    width: 100%;
+    min-width: 200px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    border-radius: var(--radius-sm);
+  }
+
+  .gestion-table .badge {
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    display: inline-block;
   }
 
   .empty-state { text-align: center; padding: 36px; color: var(--gris); }
