@@ -1144,13 +1144,23 @@ function actualizarActividad(datos) {
       rangoP.setValues(matrizP);
     }
     SpreadsheetApp.flush();
+
+    // Cierre automático de formularios y desactivación de activadores cuando la actividad pasa a "En ejecución", "Ejecutada", "Suspendida", "Cerrada" o "Archivada"
+    const impactoForms = typeof cerrarFormulariosYActivadoresActividad_ === 'function'
+      ? cerrarFormulariosYActivadoresActividad_(idActividad, estado)
+      : { cerrados: 0, formulariosDesactivados: 0 };
+    const mensajeForms = impactoForms.formulariosDesactivados || impactoForms.cerrados
+      ? ' Se cerró la recepción de respuestas en ' + impactoForms.cerrados + ' formulario(s) y se desactivaron sus activadores.'
+      : '';
+
     sigcRegistrarLog(
       'ACTUALIZAR',
       'ACTIVIDAD',
       idActividad,
       'Estado: ' + String(filaActividad.datos.ESTADO_ACTIVIDAD || 'Sin estado') +
         ' → ' + estado + '. Participaciones sincronizadas: ' + sincronizadas +
-        '. Resultados recalculados: ' + resultadosRecalculados + '.'
+        '. Resultados recalculados: ' + resultadosRecalculados + '.' +
+        (impactoForms.cerrados ? ' Formularios cerrados: ' + impactoForms.cerrados + '.' : '')
     );
     return {
       ok: true,
@@ -1158,9 +1168,11 @@ function actualizarActividad(datos) {
       actividad: actividadActualizada,
       participacionesSincronizadas: sincronizadas,
       resultadosRecalculados: resultadosRecalculados,
+      formulariosCerrados: impactoForms.cerrados,
       mensaje: 'La actividad fue actualizada. ' +
         (sincronizadas ? 'Se sincronizaron ' + sincronizadas + ' participaciones. ' : 'No tenía participaciones asociadas. ') +
-        (finalizada ? 'Se recalcularon ' + resultadosRecalculados + ' resultados de seleccionados.' : '')
+        (finalizada ? 'Se recalcularon ' + resultadosRecalculados + ' resultados de seleccionados.' : '') +
+        mensajeForms
     };
   } finally {
     lock.releaseLock();
@@ -1226,6 +1238,12 @@ function quitarActividad(payload) {
       impacto.filaActividad.numeroFila,
       {ESTADO_ACTIVIDAD:'Archivada'}
     );
+
+    // Cierre de Google Forms y desactivación de activadores
+    if (typeof cerrarFormulariosYActivadoresActividad_ === 'function') {
+      try { cerrarFormulariosYActivadoresActividad_(payload.idActividad, 'Archivada'); } catch (e) {}
+    }
+
     const spreadsheetsARevisar = new Set();
     impacto.formulariosActivos.forEach(function(fila) {
       webActualizarFilaPorEncabezados_(

@@ -223,6 +223,86 @@ function eliminarTriggerFormularioVinculadoSiNoSeUsa_(spreadsheetId) {
   return {eliminados: eliminados, motivo: 'La Sheet ya no tiene vinculaciones activas.'};
 }
 
+/**
+ * Cierra automáticamente la recepción de respuestas en Google Forms y desactiva
+ * las vinculaciones y activadores de una actividad cuando esta pasa a 'En ejecución',
+ * 'Ejecutada', 'Suspendida', 'Cerrada' o 'Archivada'.
+ */
+function cerrarFormulariosYActivadoresActividad_(idActividad, nuevoEstado) {
+  idActividad = String(idActividad || '').trim();
+  nuevoEstado = String(nuevoEstado || '').trim();
+  if (!idActividad) return { cerrados: 0, formulariosDesactivados: 0 };
+
+  const estadosCierre = [
+    'EN EJECUCION', 'EN EJECUCIÓN', 'EJECUTADA', 'SUSPENDIDA', 'CERRADA', 'ARCHIVADA'
+  ];
+  const estadoNorm = normalizarEncabezado_(nuevoEstado);
+  if (estadosCierre.indexOf(estadoNorm) < 0) return { cerrados: 0, formulariosDesactivados: 0 };
+
+  const ss = sigcSpreadsheetCentral_();
+  const hojaConfig = ss.getSheetByName(SISTEMA.HOJAS.FORMULARIOS || 'CONFIG_FORMULARIOS');
+  if (!hojaConfig || hojaConfig.getLastRow() < 2) return { cerrados: 0, formulariosDesactivados: 0 };
+
+  const datos = hojaConfig.getDataRange().getValues();
+  const mapa = mapaEncabezados_(datos[0]);
+  let formsCerrados = 0;
+  let vinculacionesDesactivadas = 0;
+  const spreadsheetsParaTrigger = [];
+
+  for (let i = 1; i < datos.length; i++) {
+    const filaActId = String(datos[i][mapa['ID ACTIVIDAD']] || '').trim();
+    if (filaActId !== idActividad) continue;
+
+    const estadoForm = normalizarEncabezado_(datos[i][mapa['ESTADO']]);
+    const formId = String(datos[i][mapa['FORM ID']] || '').trim();
+    const spreadsheetId = String(datos[i][mapa['SPREADSHEET RESPUESTAS ID']] || '').trim();
+
+    // 1. Cerrar formulario Google Form
+    if (formId) {
+      try {
+        const form = FormApp.openById(formId);
+        if (form) {
+          form.setAcceptingResponses(false);
+          form.setCustomClosedFormMessage(
+            'El periodo de postulación/inscripción para esta actividad ha finalizado (' + nuevoEstado + '). ' +
+            'Municipalidad de Santiago — Sistema Integrado de Capacitaciones.'
+          );
+          formsCerrados++;
+        }
+      } catch (eForm) {
+        console.warn('No se pudo cerrar formulario ' + formId + ': ' + eForm.message);
+      }
+    }
+
+    // 2. Si la vinculación estaba activa, marcarla como Inactivo
+    if (estadoForm === 'ACTIVO') {
+      hojaConfig.getRange(i + 1, mapa['ESTADO'] + 1).setValue('Inactivo');
+      vinculacionesDesactivadas++;
+      if (spreadsheetId && spreadsheetsParaTrigger.indexOf(spreadsheetId) < 0) {
+        spreadsheetsParaTrigger.push(spreadsheetId);
+      }
+    }
+  }
+
+  // 3. Limpiar activadores de las planillas de respuestas si ya no tienen formularios activos
+  spreadsheetsParaTrigger.forEach(function(ssId) {
+    try {
+      eliminarTriggerFormularioVinculadoSiNoSeUsa_(ssId);
+    } catch (eTrig) {
+      console.warn('Error al verificar activador para ' + ssId + ': ' + eTrig.message);
+    }
+  });
+
+  if (vinculacionesDesactivadas > 0 || formsCerrados > 0) {
+    try { CacheService.getScriptCache().remove('SIGC_PANEL_FORMULARIOS_V1'); } catch (e) {}
+  }
+
+  return {
+    cerrados: formsCerrados,
+    formulariosDesactivados: vinculacionesDesactivadas
+  };
+}
+
 function alEnviarFormularioVinculado(e) {
   if (!e || !e.range || !e.source) {
     console.error('Evento de formulario no válido.');
@@ -1138,12 +1218,17 @@ function actualizarEstadosActividadesVencidas() {
     }
     if (ids.length) {
       SpreadsheetApp.flush();
+      ids.forEach(function(idAct) {
+        if (idAct) {
+          try { cerrarFormulariosYActivadoresActividad_(idAct, 'Ejecutada'); } catch (e) {}
+        }
+      });
       if (typeof webInvalidarDashboard_ === 'function') webInvalidarDashboard_();
       sigcRegistrarLog(
         'ACTUALIZACION AUTOMATICA',
         'ACTIVIDAD',
         ids.filter(Boolean).join(', '),
-        ids.length + ' actividad(es) pasaron a Ejecutada por fecha de término.'
+        ids.length + ' actividad(es) pasaron a Ejecutada por fecha de término. Formularios y activadores cerrados automáticamente.'
       );
     }
     return {ok:true, actualizadas:ids.length, ids:ids};
